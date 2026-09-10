@@ -9,6 +9,7 @@ public class ConfigService
     private readonly string _configDir;
     private readonly string _configPath;
     private readonly string _dnsListPath;
+    private readonly string _dnsRoutesPath;
     private readonly JsonSerializerOptions _jsonOptions;
 
     public ConfigService(string configDir)
@@ -16,6 +17,7 @@ public class ConfigService
         _configDir = configDir;
         _configPath = Path.Combine(_configDir, "dyndns.json");
         _dnsListPath = Path.Combine(_configDir, "dns-list.json");
+        _dnsRoutesPath = Path.Combine(_configDir, "dns-routes.json");
         _jsonOptions = new JsonSerializerOptions
         {
             WriteIndented = true,
@@ -25,6 +27,7 @@ public class ConfigService
 
     public string ConfigPath => _configPath;
     public string DnsListPath => _dnsListPath;
+    public string DnsRoutesPath => _dnsRoutesPath;
 
     /// <summary>
     /// A router counts as configured once both an address and a password are present.
@@ -70,6 +73,10 @@ public class ConfigService
         }
     }
 
+    /// <summary>
+    /// The classic list the tray menu maintains: <c>{ "groupName", "domains": [ ... ] }</c>, pushed
+    /// to the router as the group named in the file (default <c>default</c>).
+    /// </summary>
     public DnsGroup LoadDnsList()
     {
         if (File.Exists(_dnsListPath))
@@ -102,6 +109,8 @@ public class ConfigService
 
     public void SaveDnsList(DnsGroup group)
     {
+        Directory.CreateDirectory(_configDir);
+
         var saveGroup = new
         {
             groupName = group.Name,
@@ -111,6 +120,56 @@ public class ConfigService
         var json = JsonSerializer.Serialize(saveGroup, _jsonOptions);
         File.WriteAllText(_dnsListPath, json);
         group.DnsListFile = _dnsListPath;
+    }
+
+    /// <summary>
+    /// Domains added from the search window together with the VPN interface they should use. Kept in
+    /// a separate file so the classic list above keeps its own format and router group.
+    /// </summary>
+    public List<DnsRoute> LoadRoutes()
+    {
+        var routes = new List<DnsRoute>();
+
+        if (!File.Exists(_dnsRoutesPath))
+            return routes;
+
+        var json = File.ReadAllText(_dnsRoutesPath);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        if (!root.TryGetProperty("routes", out var routesProperty) || routesProperty.ValueKind != JsonValueKind.Array)
+            return routes;
+
+        foreach (var item in routesProperty.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var domain = item.TryGetProperty("domain", out var domainProperty) ? domainProperty.GetString() : null;
+            if (string.IsNullOrWhiteSpace(domain))
+                continue;
+
+            var interfaceName = item.TryGetProperty("interface", out var interfaceProperty)
+                ? interfaceProperty.GetString()
+                : null;
+
+            routes.Add(new DnsRoute(domain, interfaceName ?? string.Empty));
+        }
+
+        return routes;
+    }
+
+    public void SaveRoutes(IReadOnlyList<DnsRoute> routes)
+    {
+        Directory.CreateDirectory(_configDir);
+
+        var payload = new
+        {
+            routes = routes.Select(route => new { domain = route.Domain, @interface = route.Interface })
+        };
+
+        var json = JsonSerializer.Serialize(payload, _jsonOptions);
+        File.WriteAllText(_dnsRoutesPath, json);
     }
 
     public void EnsureConfigExists()
@@ -140,14 +199,12 @@ public class ConfigService
 
         if (!File.Exists(_dnsListPath))
         {
-            var group = new
-            {
-                groupName = "default",
-                domains = new List<string>()
-            };
+            SaveDnsList(new DnsGroup { Name = "default", Domains = new List<string>() });
+        }
 
-            var json = JsonSerializer.Serialize(group, _jsonOptions);
-            File.WriteAllText(_dnsListPath, json);
+        if (!File.Exists(_dnsRoutesPath))
+        {
+            SaveRoutes(Array.Empty<DnsRoute>());
         }
     }
 }

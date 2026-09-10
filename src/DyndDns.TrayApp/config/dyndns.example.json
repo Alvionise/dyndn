@@ -13,5 +13,10 @@
     "Key": "V",
     "Modifiers": "Control+Shift"
   },
+  "Sqlite": {
+    "DatabaseFile": "dns.db",
+    "MonitorEnabled": true,
+    "BrowserHistoryEnabled": true
+  },
   "SetupDismissed": false
 }

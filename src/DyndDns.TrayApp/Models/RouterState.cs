@@ -20,3 +20,6 @@ public class RouterState
     public List<FqdnGroupEntry> FqdnGroups { get; set; } = new();
     public List<DnsRouteEntry> DnsRoutes { get; set; } = new();
 }
+
+/// <summary>A dns-proxy route as configured on the router with the domains of the group it points at.</summary>
+public sealed record RouterRouteGroup(string GroupName, string Interface, IReadOnlyList<string> Domains);

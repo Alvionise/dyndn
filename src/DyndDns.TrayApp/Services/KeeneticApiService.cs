@@ -40,6 +40,7 @@ public sealed class KeeneticApiService : IDisposable
 
     private readonly HttpClient _httpClient;
     private readonly RouterConfig _routerConfig;
+    private readonly SemaphoreSlim _authenticationLock = new(1, 1);
     private bool _isAuthenticated;
 
     public KeeneticApiService(RouterConfig routerConfig)
@@ -152,8 +153,22 @@ public sealed class KeeneticApiService : IDisposable
         if (_isAuthenticated)
             return true;
 
-        _isAuthenticated = await AuthenticateAsync();
-        return _isAuthenticated;
+        // Concurrent callers (the startup sync and the VPN refresh) share one router session, where a
+        // fresh challenge invalidates the previous one; the login is therefore performed once.
+        await _authenticationLock.WaitAsync();
+
+        try
+        {
+            if (_isAuthenticated)
+                return true;
+
+            _isAuthenticated = await AuthenticateAsync();
+            return _isAuthenticated;
+        }
+        finally
+        {
+            _authenticationLock.Release();
+        }
     }
 
     private async Task<bool> AuthenticateAsync()
@@ -550,6 +565,51 @@ public sealed class KeeneticApiService : IDisposable
         VpnInterfacePrefixes.Any(prefix =>
             name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
             type.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The routing state as the router itself has it: every dns-proxy route together with the domains
+    /// of the group it points at. This is the authoritative view the local files are aligned with.
+    /// </summary>
+    public async Task<List<RouterRouteGroup>> GetRouteGroupsAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+            throw new InvalidOperationException("Authentication failed");
+
+        var state = await GetRouterStateAsync();
+        var groups = new List<RouterRouteGroup>();
+
+        foreach (var route in state.DnsRoutes)
+        {
+            var group = state.FqdnGroups.FirstOrDefault(entry =>
+                string.Equals(entry.Name, route.Group, StringComparison.OrdinalIgnoreCase));
+
+            if (group is null)
+                continue;
+
+            groups.Add(new RouterRouteGroup(route.Group, route.Interface, group.Domains.ToList()));
+        }
+
+        return groups;
+    }
+
+    /// <summary>
+    /// Removes the dns-proxy routes and FQDN groups this app manages that are no longer wanted,
+    /// so deleting a domain locally also cleans up the router.
+    /// </summary>
+    public async Task RemoveStaleRoutingGroupsAsync(IReadOnlyCollection<string> keepGroupNames)
+    {
+        if (!await EnsureAuthenticatedAsync())
+            throw new InvalidOperationException("Authentication failed");
+
+        var keep = new HashSet<string>(keepGroupNames, StringComparer.OrdinalIgnoreCase);
+        var state = await GetRouterStateAsync();
+
+        foreach (var route in state.DnsRoutes.Where(entry => DnsRouting.IsRoutingGroup(entry.Group) && !keep.Contains(entry.Group)))
+            await SendBatchAsync(BuildDeleteRouteCommand(route), SaveConfigurationCommand);
+
+        foreach (var group in state.FqdnGroups.Where(entry => DnsRouting.IsRoutingGroup(entry.Name) && !keep.Contains(entry.Name)))
+            await SendBatchAsync(BuildDeleteGroupCommand(group.Name), SaveConfigurationCommand);
+    }
 
     public void Dispose() => _httpClient.Dispose();
 }

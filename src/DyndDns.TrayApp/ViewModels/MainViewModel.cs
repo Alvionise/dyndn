@@ -23,12 +23,17 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly System.Windows.Forms.ToolStripMenuItem _syncMenuItem;
     private readonly System.Windows.Forms.Keys _shortcutKeys;
     private readonly HotkeyManager? _hotkeyManager;
+    private readonly DnsMonitorService _dnsMonitor;
+    private readonly System.Windows.Forms.ToolStripMenuItem _monitorMenuItem;
+
+    private DnsSearchWindow? _searchWindow;
 
     private readonly Icon _defaultIcon;
     private readonly Icon _syncIcon;
     private readonly Icon _errorIcon;
 
     private DnsGroup? _dnsList;
+    private List<DnsRoute> _routes = new();
 
     public MainViewModel(string configDir)
     {
@@ -40,8 +45,17 @@ public class MainViewModel : INotifyPropertyChanged
         _apiService = new KeeneticApiService(_config.Router);
         _syncService = new SyncService(_configService, _apiService);
         _syncService.SyncProgress += OnSyncProgress;
+        _syncService.SyncCompleted += OnSyncCompleted;
 
         _dnsList = _configService.LoadDnsList();
+        _routes = _configService.LoadRoutes();
+
+        var databasePath = Path.IsPathRooted(_config.Sqlite.DatabaseFile)
+            ? _config.Sqlite.DatabaseFile
+            : Path.Combine(configDir, _config.Sqlite.DatabaseFile);
+
+        _dnsMonitor = new DnsMonitorService(databasePath, _config.Sqlite.BrowserHistoryEnabled);
+        _monitorMenuItem = new System.Windows.Forms.ToolStripMenuItem("Мониторинг DNS");
 
         _defaultIcon = LoadIcon("DyndDns.TrayApp.app.ico");
         _syncIcon = LoadIcon("DyndDns.TrayApp.app.sync.ico");
@@ -75,8 +89,8 @@ public class MainViewModel : INotifyPropertyChanged
 
         _syncService.StartWatching();
 
-        if (_dnsList.Domains.Count > 0)
-            _syncService.RequestSync(SnapshotDnsList());
+        if ((_dnsList?.Domains.Count ?? 0) > 0 || _routes.Count > 0)
+            _syncService.RequestSync();
 
         RunFirstRunSetupIfNeeded();
 
@@ -84,20 +98,19 @@ public class MainViewModel : INotifyPropertyChanged
         var startupDispatcher = System.Windows.Application.Current?.Dispatcher;
 
         if (startupDispatcher is null)
-            RefreshVpnInterface(interactive: false);
-        else
-            startupDispatcher.BeginInvoke(new Action(() => RefreshVpnInterface(interactive: false)));
-    }
-
-    public DnsGroup? DnsList
-    {
-        get => _dnsList;
-        set
         {
-            _dnsList = value;
-            OnPropertyChanged();
+            RefreshVpnInterface(interactive: false);
+            StartDnsMonitor(manual: false);
+        }
+        else
+        {
+            startupDispatcher.BeginInvoke(new Action(() => RefreshVpnInterface(interactive: false)));
+            startupDispatcher.BeginInvoke(new Action(() => StartDnsMonitor(manual: false)));
         }
     }
+
+    /// <summary>Tracked domains together with the interface each one is routed through.</summary>
+    public IReadOnlyList<DnsRoute> Routes => _routes;
 
     private void BuildContextMenu()
     {
@@ -116,18 +129,14 @@ public class MainViewModel : INotifyPropertyChanged
 
         _contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
-        _syncMenuItem.Click += (s, e) => _syncService.RequestSync(SnapshotDnsList());
+        _syncMenuItem.Click += (s, e) => _syncService.RequestSync();
         _contextMenu.Items.Add(_syncMenuItem);
 
         _contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
-        var setupItem = new System.Windows.Forms.ToolStripMenuItem("Настройка роутера");
-        setupItem.Click += (s, e) => RunSetupWizard();
-        _contextMenu.Items.Add(setupItem);
+        _contextMenu.Items.Add(BuildRoutingMenu());
 
-        var refreshVpnItem = new System.Windows.Forms.ToolStripMenuItem("Обновить VPN");
-        refreshVpnItem.Click += (s, e) => RefreshVpnInterface(interactive: true);
-        _contextMenu.Items.Add(refreshVpnItem);
+        _contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
         var settingsItem = new System.Windows.Forms.ToolStripMenuItem("Настройки");
         settingsItem.Click += (s, e) => OpenConfig();
@@ -138,6 +147,34 @@ public class MainViewModel : INotifyPropertyChanged
         _contextMenu.Items.Add(exitItem);
 
         _notifyIcon.ContextMenuStrip = _contextMenu;
+    }
+
+    /// <summary>
+    /// Everything the app offers on top of the classic domain list: searching the recorded domains,
+    /// the DNS monitor, and the router/VPN maintenance actions.
+    /// </summary>
+    private System.Windows.Forms.ToolStripMenuItem BuildRoutingMenu()
+    {
+        var menu = new System.Windows.Forms.ToolStripMenuItem("Мониторинг и маршруты");
+
+        var searchItem = new System.Windows.Forms.ToolStripMenuItem("Поиск доменов...");
+        searchItem.Click += (s, e) => OpenSearchWindow();
+        menu.DropDownItems.Add(searchItem);
+
+        _monitorMenuItem.Click += (s, e) => ToggleDnsMonitor();
+        menu.DropDownItems.Add(_monitorMenuItem);
+
+        menu.DropDownItems.Add(new System.Windows.Forms.ToolStripSeparator());
+
+        var refreshVpnItem = new System.Windows.Forms.ToolStripMenuItem("Обновить VPN");
+        refreshVpnItem.Click += (s, e) => RefreshVpnInterface(interactive: true);
+        menu.DropDownItems.Add(refreshVpnItem);
+
+        var setupItem = new System.Windows.Forms.ToolStripMenuItem("Настройка роутера");
+        setupItem.Click += (s, e) => RunSetupWizard();
+        menu.DropDownItems.Add(setupItem);
+
+        return menu;
     }
 
     private static System.Windows.Forms.Keys ComputeShortcut(HotkeyConfig hotkey)
@@ -157,24 +194,42 @@ public class MainViewModel : INotifyPropertyChanged
 
         return result | (hotkey.Key switch
         {
-            "A" => System.Windows.Forms.Keys.A, "B" => System.Windows.Forms.Keys.B,
-            "C" => System.Windows.Forms.Keys.C, "D" => System.Windows.Forms.Keys.D,
-            "E" => System.Windows.Forms.Keys.E, "F" => System.Windows.Forms.Keys.F,
-            "G" => System.Windows.Forms.Keys.G, "H" => System.Windows.Forms.Keys.H,
-            "I" => System.Windows.Forms.Keys.I, "J" => System.Windows.Forms.Keys.J,
-            "K" => System.Windows.Forms.Keys.K, "L" => System.Windows.Forms.Keys.L,
-            "M" => System.Windows.Forms.Keys.M, "N" => System.Windows.Forms.Keys.N,
-            "O" => System.Windows.Forms.Keys.O, "P" => System.Windows.Forms.Keys.P,
-            "Q" => System.Windows.Forms.Keys.Q, "R" => System.Windows.Forms.Keys.R,
-            "S" => System.Windows.Forms.Keys.S, "T" => System.Windows.Forms.Keys.T,
-            "U" => System.Windows.Forms.Keys.U, "V" => System.Windows.Forms.Keys.V,
-            "W" => System.Windows.Forms.Keys.W, "X" => System.Windows.Forms.Keys.X,
-            "Y" => System.Windows.Forms.Keys.Y, "Z" => System.Windows.Forms.Keys.Z,
-            "0" => System.Windows.Forms.Keys.D0, "1" => System.Windows.Forms.Keys.D1,
-            "2" => System.Windows.Forms.Keys.D2, "3" => System.Windows.Forms.Keys.D3,
-            "4" => System.Windows.Forms.Keys.D4, "5" => System.Windows.Forms.Keys.D5,
-            "6" => System.Windows.Forms.Keys.D6, "7" => System.Windows.Forms.Keys.D7,
-            "8" => System.Windows.Forms.Keys.D8, "9" => System.Windows.Forms.Keys.D9,
+            "A" => System.Windows.Forms.Keys.A,
+            "B" => System.Windows.Forms.Keys.B,
+            "C" => System.Windows.Forms.Keys.C,
+            "D" => System.Windows.Forms.Keys.D,
+            "E" => System.Windows.Forms.Keys.E,
+            "F" => System.Windows.Forms.Keys.F,
+            "G" => System.Windows.Forms.Keys.G,
+            "H" => System.Windows.Forms.Keys.H,
+            "I" => System.Windows.Forms.Keys.I,
+            "J" => System.Windows.Forms.Keys.J,
+            "K" => System.Windows.Forms.Keys.K,
+            "L" => System.Windows.Forms.Keys.L,
+            "M" => System.Windows.Forms.Keys.M,
+            "N" => System.Windows.Forms.Keys.N,
+            "O" => System.Windows.Forms.Keys.O,
+            "P" => System.Windows.Forms.Keys.P,
+            "Q" => System.Windows.Forms.Keys.Q,
+            "R" => System.Windows.Forms.Keys.R,
+            "S" => System.Windows.Forms.Keys.S,
+            "T" => System.Windows.Forms.Keys.T,
+            "U" => System.Windows.Forms.Keys.U,
+            "V" => System.Windows.Forms.Keys.V,
+            "W" => System.Windows.Forms.Keys.W,
+            "X" => System.Windows.Forms.Keys.X,
+            "Y" => System.Windows.Forms.Keys.Y,
+            "Z" => System.Windows.Forms.Keys.Z,
+            "0" => System.Windows.Forms.Keys.D0,
+            "1" => System.Windows.Forms.Keys.D1,
+            "2" => System.Windows.Forms.Keys.D2,
+            "3" => System.Windows.Forms.Keys.D3,
+            "4" => System.Windows.Forms.Keys.D4,
+            "5" => System.Windows.Forms.Keys.D5,
+            "6" => System.Windows.Forms.Keys.D6,
+            "7" => System.Windows.Forms.Keys.D7,
+            "8" => System.Windows.Forms.Keys.D8,
+            "9" => System.Windows.Forms.Keys.D9,
             _ => System.Windows.Forms.Keys.V
         });
     }
@@ -394,25 +449,38 @@ public class MainViewModel : INotifyPropertyChanged
         if (_dnsList is null)
             return;
 
-        _syncService.PersistAndSync(() => _configService.SaveDnsList(_dnsList), SnapshotDnsList());
+        _syncService.PersistAndSync(() => _configService.SaveDnsList(_dnsList));
     }
 
     /// <summary>
-    /// Copies the live list so the background sync never observes a collection that the
-    /// UI thread mutates while the request is in flight.
+    /// Adds a domain picked in the search window, bound to a specific VPN interface. These live in
+    /// their own file so the classic list keeps its format and its group on the router.
     /// </summary>
-    private DnsGroup SnapshotDnsList()
+    private bool AddRoute(string domain, string interfaceName)
     {
-        var source = _dnsList ?? new DnsGroup();
+        if (_routes.Any(route => string.Equals(route.Domain, domain, StringComparison.OrdinalIgnoreCase)))
+            return false;
 
-        return new DnsGroup
-        {
-            Name = source.Name,
-            Description = source.Description,
-            DnsListFile = source.DnsListFile,
-            Enabled = source.Enabled,
-            Domains = source.Domains.ToList()
-        };
+        _routes.Add(new DnsRoute(domain, interfaceName));
+        _syncService.PersistAndSync(() => _configService.SaveRoutes(_routes));
+        return true;
+    }
+
+    /// <summary>
+    /// Drops a route picked in the search window. The domain leaves the local file and the following
+    /// sync rewrites the router groups without it, so the removal reaches the router as well.
+    /// </summary>
+    private bool RemoveRoute(string domain)
+    {
+        var existing = _routes.FirstOrDefault(route =>
+            string.Equals(route.Domain, domain, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is null)
+            return false;
+
+        _routes.Remove(existing);
+        _syncService.PersistAndSync(() => _configService.SaveRoutes(_routes));
+        return true;
     }
 
     private void OpenDnsList()
@@ -460,6 +528,130 @@ public class MainViewModel : INotifyPropertyChanged
             RunSetupWizard();
         else
             dispatcher.BeginInvoke(new Action(RunSetupWizard));
+    }
+
+    /// <summary>
+    /// Starts DNS collection. Called on startup (honouring the config flag) and from the tray menu,
+    /// where a manual start ignores the flag.
+    /// </summary>
+    private void StartDnsMonitor(bool manual)
+    {
+        if (_dnsMonitor.IsRunning)
+        {
+            UpdateMonitorMenu();
+            return;
+        }
+
+        if (!manual && !_config.Sqlite.MonitorEnabled)
+        {
+            UpdateMonitorMenu();
+            return;
+        }
+
+        if (!_dnsMonitor.Start())
+        {
+            ShowNotification("Мониторинг DNS не запущен: нужны права администратора и настроенная база Sqlite.", ErrorNotificationMs);
+            UpdateMonitorMenu();
+            return;
+        }
+
+        UpdateMonitorMenu();
+    }
+
+    private void ToggleDnsMonitor()
+    {
+        if (_dnsMonitor.IsRunning)
+            _dnsMonitor.Stop();
+        else
+            StartDnsMonitor(manual: true);
+
+        UpdateMonitorMenu();
+    }
+
+    private void UpdateMonitorMenu() =>
+        _monitorMenuItem.Text = _dnsMonitor.IsRunning ? "Мониторинг DNS: вкл" : "Мониторинг DNS: выкл";
+
+    private void OpenSearchWindow()
+    {
+        if (_searchWindow is { IsDisposed: false })
+        {
+            _searchWindow.Activate();
+            return;
+        }
+
+        _searchWindow = new DnsSearchWindow(
+            (term, limit) => _dnsMonitor.Search(term, limit),
+            () => Task.Run(() => _apiService.GetVpnInterfacesAsync()).GetAwaiter().GetResult(),
+            () => _routes.ToList(),
+            ReadRouterRoutes,
+            AddRoute,
+            RemoveRoute);
+
+        _searchWindow.FormClosed += (_, _) => _searchWindow = null;
+        _searchWindow.Show();
+    }
+
+    /// <summary>
+    /// Reads the routing state from the router. The router is the source of truth, so every read also
+    /// aligns the locally stored bindings with it.
+    /// </summary>
+    private IReadOnlyDictionary<string, string> ReadRouterRoutes()
+    {
+        var groups = Task.Run(() => _apiService.GetRouteGroupsAsync()).GetAwaiter().GetResult();
+
+        // While a change of our own is still on its way to the router, its state is only displayed:
+        // reconciling now would bring just removed routes back from the not-yet-updated router.
+        if (!_syncService.IsBusy)
+            ReconcileRoutes(DnsRouting.FromRouterGroups(groups));
+
+        var routed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in groups)
+        {
+            foreach (var domain in group.Domains)
+                routed[domain] = group.Interface;
+        }
+
+        return routed;
+    }
+
+    /// <summary>Adopts the bindings reported by the router; local-only entries are left untouched.</summary>
+    private void ReconcileRoutes(IReadOnlyList<DnsRoute> routerRoutes)
+    {
+        if (routerRoutes.Count == 0)
+            return;
+
+        var merged = DnsRouting.MergeRouterRoutes(_routes, routerRoutes);
+
+        if (merged.SequenceEqual(_routes))
+            return;
+
+        _routes = merged;
+        _configService.SaveRoutes(_routes);
+        System.Diagnostics.Trace.TraceInformation($"Routes reconciled from the router: {_routes.Count} entries");
+    }
+
+    private void OnSyncCompleted() => Dispatch(RefreshRoutingState);
+
+    /// <summary>
+    /// Re-reads the routing state after a synchronization and repaints the search window when it is
+    /// open. Runs on the UI thread because it touches the tracked routes and the window.
+    /// </summary>
+    private void RefreshRoutingState()
+    {
+        IReadOnlyDictionary<string, string> routed;
+
+        try
+        {
+            routed = ReadRouterRoutes();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"Router routing state refresh failed: {ex.Message}");
+            return;
+        }
+
+        _searchWindow?.ApplyRouterState(routed);
     }
 
     private void RunSetupWizard()
@@ -529,8 +721,8 @@ public class MainViewModel : INotifyPropertyChanged
         else if (interactive)
             ShowNotification($"VPN-интерфейс: {active.Name}", SuccessNotificationMs);
 
-        if (changed && _dnsList is { Domains.Count: > 0 })
-            _syncService.RequestSync(SnapshotDnsList());
+        if (changed && _routes.Count > 0)
+            _syncService.RequestSync();
     }
 
     private VpnInterfaceInfo? PromptVpnInterfaceSelection(IReadOnlyList<VpnInterfaceInfo> interfaces)
@@ -545,6 +737,8 @@ public class MainViewModel : INotifyPropertyChanged
     private void Exit()
     {
         _hotkeyManager?.Dispose();
+        _searchWindow?.Close();
+        _dnsMonitor.Dispose();
         _syncService.Dispose();
         _apiService.Dispose();
         _notifyIcon.Dispose();

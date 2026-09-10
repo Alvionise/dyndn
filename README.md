@@ -26,6 +26,8 @@ A lightweight Windows tray app that syncs a local domain list to a **Keenetic** 
 - Windows 10/11 (x64).
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) — для сборки из исходников.
 - Роутер Keenetic с доступным HTTP-интерфейсом (RCI) и настроенным VPN-подключением (например, `OpenVPN0`).
+- Запуск от имени администратора: приложение запрашивает права (UAC), так как мониторинг DNS читает
+  real-time сессию ETW.
 
 ### Сборка и запуск
 
@@ -75,7 +77,9 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
 | --- | --- |
 | `Router.Address` | Адрес роутера Keenetic. |
 | `Router.Username` / `Password` | Учётные данные администратора роутера. |
-| `VpnInterface` | Имя VPN-интерфейса, в который направляется трафик доменов. |
+| `VpnInterface` | Имя VPN-интерфейса, в который направляется трафик доменов по умолчанию. |
+| `Sqlite.DatabaseFile` | Файл базы SQLite с записанными DNS-доменами (относительный путь — рядом с exe). |
+| `Sqlite.MonitorEnabled` | Вести запись DNS-доменов при запуске приложения. |
 | `Sync.AutoSync` | Следить за файлом списка и синхронизировать автоматически. |
 | `Hotkey.Enabled` | Включить глобальную горячую клавишу. |
 | `Hotkey.Key` | Клавиша (`A`–`Z`, `0`–`9`). |
@@ -130,17 +134,52 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
 Секреты VPN (логины, пароли, ключи) приложением не читаются и в `config/dyndns.json` не сохраняются —
 там остаётся только имя интерфейса.
 
+### Мониторинг DNS и поиск доменов
+
+Приложение записывает, какие домены запрашиваются на этом компьютере. Используется встроенный
+ETW-провайдер `Microsoft-Windows-DNS-Client`, сторонние драйверы не требуются. Обращения
+агрегируются по домену и складываются в локальную базу SQLite (`config/dns.db`): домен, число
+обращений, время первого и последнего запроса. Процесс и точное время обращений не сохраняются.
+
+Браузеры резолвят адреса собственным резолвером, поэтому их запросы до ETW-провайдера Windows не
+доходят. Чтобы посещённые сайты тоже были в списке, приложение дополнительно читает историю
+браузеров (Chrome, Edge, Yandex, Brave, Vivaldi, Opera, Firefox) и агрегирует её по домену с числом
+посещений. Импорт выполняется при запуске, а дальше — только когда браузер дописал историю;
+отключается флагом `Sqlite.BrowserHistoryEnabled`. Содержимое страниц не сохраняется: в базу попадают
+только домен, число посещений и время последнего.
+
+В меню трея:
+
+- **Поиск доменов...** — окно поиска по подстроке, список VPN-подключений и кнопки
+  **Добавить выбранные** / **Удалить маршруты**: домены привязываются к указанному VPN или
+  освобождаются от маршрута (клавиша `Delete` делает то же для выделенных строк). Свежие обращения
+  показываются первыми, а в колонке «Маршрут» указан интерфейс, через который домен идёт: зелёный —
+  это выбранный VPN, жёлтый — другой. Галочка **«Только маршруты на роутере»** оставляет в списке
+  лишь домены, у которых маршрут уже есть на роутере. Список и маршруты обновляются кнопками,
+  клавишей F5, автоматически раз в 5 секунд и сразу после синхронизации.
+- **Мониторинг DNS** — включить или выключить запись.
+
+Маршруты группируются по VPN: на каждый интерфейс создаётся своя FQDN-группа `dyndns-<Интерфейс>` и
+свой `dns-proxy route`; группы, которые больше не нужны, удаляются с роутера автоматически.
+
+Роутер считается основным источником данных: когда приложение читает его состояние, локальные привязки
+домен→VPN сверяются с ним, и расхождения (например, маршрут переключили в веб-интерфейсе) переносятся
+в `dns-routes.json`. Записи, которые ещё не успели синхронизироваться, при этом не удаляются.
+
 ### Использование
 
 1. Запустите `dyndns.exe` — иконка появится в системном трее.
 2. Кликните правой кнопкой по иконке, чтобы открыть меню:
+   - **Открыть список** — открыть `dns-list.json`;
    - **Добавить домен...** — добавить домен (или нажать горячую клавишу, по умолчанию `Ctrl+Shift+V`);
    - **Домены (N)** — просмотр и удаление отдельных доменов;
    - **Синхронизировать** — принудительная синхронизация;
-   - **Настройка роутера** — повторно найти роутер и ввести логин с паролем;
-   - **Обновить VPN** — перечитать VPN-подключения роутера и обновить конфиг;
+   - **Мониторинг и маршруты** — подменю со всем, что появилось сверх классического списка:
+     - **Поиск доменов...** — окно поиска записанных доменов с добавлением на роутер и выбором VPN;
+     - **Мониторинг DNS** — включить или выключить запись DNS-доменов;
+     - **Обновить VPN** — перечитать VPN-подключения роутера и обновить конфиг;
+     - **Настройка роутера** — повторно найти роутер и ввести логин с паролем;
    - **Настройки** — открыть `dyndns.json`;
-   - **Открыть список** — открыть `dns-list.json`;
    - **Выход** — завершить приложение.
 3. После изменения списка синхронизация запускается автоматически, если включён `AutoSync`.
 
@@ -214,6 +253,8 @@ dotnet test .\tests\DyndDns.TrayApp.Tests\DyndDns.TrayApp.Tests.csproj -c Releas
 - Windows 10/11 (x64).
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) to build from source.
 - A Keenetic router with the HTTP (RCI) interface reachable and a configured VPN connection (e.g. `OpenVPN0`).
+- Run as administrator: the app requests elevation (UAC) because the DNS monitor reads a real-time
+  ETW session.
 
 ### Build and run
 
@@ -263,7 +304,9 @@ files hold local data and are not committed.
 | --- | --- |
 | `Router.Address` | Keenetic router address. |
 | `Router.Username` / `Password` | Router administrator credentials. |
-| `VpnInterface` | Name of the VPN interface the domains are routed through. |
+| `VpnInterface` | Default VPN interface the domains are routed through. |
+| `Sqlite.DatabaseFile` | SQLite file with the recorded DNS domains (relative paths resolve next to the exe). |
+| `Sqlite.MonitorEnabled` | Record DNS domains while the app runs. |
 | `Sync.AutoSync` | Watch the list file and sync automatically. |
 | `Hotkey.Enabled` | Enable the global hotkey. |
 | `Hotkey.Key` | Key (`A`–`Z`, `0`–`9`). |
@@ -322,17 +365,52 @@ leaves through the current tunnel.
 VPN secrets (logins, passwords, keys) are never read or stored — `config/dyndns.json` keeps only the
 interface name.
 
+### DNS monitoring and domain search
+
+The app records which domains are queried on this machine through the built-in
+`Microsoft-Windows-DNS-Client` ETW provider; no third-party drivers are needed. Lookups are aggregated
+per domain into a local SQLite database (`config/dns.db`): domain, hit count, and the first/last seen
+timestamps. The process and exact lookup times are not stored.
+
+Browsers resolve names with their own resolver, so their lookups never reach the Windows ETW provider.
+To cover the sites actually visited, the app also imports the browser history (Chrome, Edge, Yandex,
+Brave, Vivaldi, Opera, Firefox) and aggregates it per domain with a visit count. The import runs at
+startup and afterwards only when a browser appended to its history; it can be switched off with
+`Sqlite.BrowserHistoryEnabled`. Page contents are never stored — only the domain, the visit count and
+the last visit time.
+
+Tray menu:
+
+- **Search domains...** — a window with substring search, a VPN interface drop-down and the buttons
+  **Add selected** / **Remove routes**: domains are either bound to the selected VPN or released from
+  their route (the `Delete` key does the same for the selected rows). The most recent lookups come
+  first, and the "Маршрут" column holds the interface the domain is routed through: green for the
+  selected VPN, yellow for another one. The **"Only routes on the router"** checkbox keeps just the
+  domains the router already routes. The list and the routing state are refreshed by the buttons, with
+  F5, every 5 seconds, and right after a synchronization.
+- **DNS monitoring** — turn the recording on or off.
+
+Routes are grouped per VPN: each interface gets its own FQDN group `dyndns-<Interface>` and its own
+`dns-proxy route`; groups that are no longer needed are removed from the router automatically.
+
+The router is treated as the source of truth: whenever its state is read, the local domain→VPN bindings
+are aligned with it, so a change made in the router's web UI lands in `dns-routes.json`. Entries that
+have not been synchronized yet are never dropped.
+
 ### Usage
 
 1. Run `dyndns.exe` — the tray icon appears.
 2. Right-click the icon to open the menu:
+   - **Open list** — open `dns-list.json`;
    - **Add domain...** — add a domain (or press the hotkey, `Ctrl+Shift+V` by default);
    - **Domains (N)** — view and remove individual domains;
    - **Synchronize** — force a sync;
-   - **Router setup** — find the router again and enter the login and password;
-   - **Refresh VPN** — re-read the router's VPN connections and update the config;
+   - **Monitoring & routing** — submenu holding everything added on top of the classic list:
+     - **Search domains...** — search recorded domains, add them to the router and pick a VPN;
+     - **DNS monitoring** — toggle DNS recording;
+     - **Refresh VPN** — re-read the router's VPN connections and update the config;
+     - **Router setup** — find the router again and enter the login and password;
    - **Settings** — open `dyndns.json`;
-   - **Open list** — open `dns-list.json`;
    - **Exit** — quit the app.
 3. After the list changes, a sync starts automatically when `AutoSync` is enabled.
 
