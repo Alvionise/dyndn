@@ -1,0 +1,61 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Publish output
+dist/
+publish/
+*.zip
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# Build tooling
+*.binlog
+*.tlog
+project.lock.json
+project.assets.json
+*.nuget.g.props
+*.nuget.g.targets
+*.nuget.dgspec.json
+*.nuget.cache
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Windows / OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# Local runtime configuration (may contain router credentials).
+# Use the tracked *.example.json templates instead.
+src/DyndDns.TrayApp/config/dyndns.json
+src/DyndDns.TrayApp/config/dns-list.json
+**/config/dyndns.json
+**/config/dns-list.json
+
+# Logs
+*.log

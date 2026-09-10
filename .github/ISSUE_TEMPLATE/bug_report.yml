@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a problem with DyndDns
+labels: [ bug ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in the details below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DyndDns version
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: router
+    attributes:
+      label: Router model and KeeneticOS version
+      placeholder: e.g. Keenetic Giga (KN-1010), KeeneticOS 4.x
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Paste any relevant lines from `config/dyndns.log` (remove credentials first).
+      render: text
+    validations:
+      required: false

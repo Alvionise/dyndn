@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DyndDns.TrayApp/DyndDns.TrayApp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DyndDns.TrayApp.Tests/DyndDns.TrayApp.Tests.csproj" />
+  </Folder>
+</Solution>

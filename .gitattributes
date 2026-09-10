@@ -1,0 +1,25 @@
+# Normalize line endings on checkout and commit.
+* text=auto
+
+# Source and scripts use LF so they stay consistent across tools.
+*.cs text eol=lf
+*.csproj text eol=lf
+*.xaml text eol=lf
+*.slnx text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.ps1 text eol=crlf
+
+# Binary assets must never be touched by line-ending conversion.
+*.ico binary
+*.png binary
+*.jpg binary
+*.exe binary
+*.dll binary
+*.zip binary
+
+# Keep diffs readable for generated-looking files.
+*.min.js -diff
+*.min.css -diff

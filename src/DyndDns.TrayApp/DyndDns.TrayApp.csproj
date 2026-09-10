@@ -1,0 +1,55 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>dyndns</AssemblyName>
+    <RootNamespace>DyndDns.TrayApp</RootNamespace>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <Authors>DyndDns contributors</Authors>
+    <Description>Windows tray app that syncs a local domain list to a Keenetic router and routes it through a VPN interface.</Description>
+    <Copyright>Copyright (c) 2026 DyndDns contributors</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Alvionise/dyndn</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>keenetic;dns;vpn;tray;windows</PackageTags>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="Assets\*.ico" />
+    <EmbeddedResource Include="Assets\app.ico" LogicalName="DyndDns.TrayApp.app.ico" />
+    <EmbeddedResource Include="Assets\app.sync.ico" LogicalName="DyndDns.TrayApp.app.sync.ico" />
+    <EmbeddedResource Include="Assets\app.error.ico" LogicalName="DyndDns.TrayApp.app.error.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="config\dyndns.example.json" />
+    <None Remove="config\dns-list.example.json" />
+    <Content Include="config\dyndns.example.json" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="config\dns-list.example.json" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DyndDns.TrayApp.Tests" />
+  </ItemGroup>
+
+</Project>
