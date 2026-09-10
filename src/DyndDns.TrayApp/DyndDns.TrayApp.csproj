@@ -11,6 +11,11 @@
     <RootNamespace>DyndDns.TrayApp</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- The Release build targets win-x64 (self-contained, single file). Declaring the RID here as
+         well makes a configuration-agnostic restore complete, so building Release on top of it
+         resolves the win-x64 assets instead of failing with NETSDK1047. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>
