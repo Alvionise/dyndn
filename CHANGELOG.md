@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The search window lists the most recently resolved domains first, refreshes the list and the routing
   state right after a synchronization, and shows only the routed interface in the "Маршрут" column.
 
+### Fixed
+
+- Release builds failed with `NETSDK1047` (`no target for net10.0-windows/win-x64`) when the restore
+  ran without the Release configuration: the project now lists `win-x64` in `RuntimeIdentifiers`, so
+  the assets file always carries the win-x64 target the Release build needs.
+
 ## [0.1.0] - 2026-09-10
 
 ### Added

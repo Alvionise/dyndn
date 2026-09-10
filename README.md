@@ -20,6 +20,8 @@ A lightweight Windows tray app that syncs a local domain list to a **Keenetic** 
   - создаёт/обновляет группу FQDN (`object-group fqdn`);
   - создаёт маршрут DNS-прокси (`dns-proxy route`), направляя эти домены в указанный VPN-интерфейс.
 - Показывает статус синхронизации иконкой в трее и всплывающим уведомлением.
+- Записывает домены, которые запрашиваются на этом компьютере (DNS-мониторинг и история браузеров),
+  и даёт искать их по списку, привязывать к VPN или снимать маршрут прямо из окна поиска.
 
 ### Требования
 
@@ -45,12 +47,16 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
 
 Скрипт принимает параметры `-Configuration`, `-Runtime` и `-Output` (по умолчанию `Release`, `win-x64`, `dist`).
 
+Debug-сборка ложится в `src\DyndDns.TrayApp\bin\Debug\net10.0-windows\`, а Release собирается под `win-x64`
+(self-contained, одним файлом) в `src\DyndDns.TrayApp\bin\Release\net10.0-windows\win-x64\`.
+
 ### Конфигурация
 
-Настройки и список доменов лежат рядом с исполняемым файлом в папке `config`.
-Приложение создаёт `config/dyndns.json` и `config/dns-list.json` при первом запуске;
-шаблоны-образцы — это `config/dyndns.example.json` и `config/dns-list.example.json`.
-Оба рабочих файла содержат локальные данные и не попадают в репозиторий.
+Настройки и списки доменов лежат рядом с исполняемым файлом в папке `config`.
+При первом запуске приложение создаёт `config/dyndns.json`, `config/dns-list.json` (классический список)
+и `config/dns-routes.json` (привязки домен→VPN, изначально пустой); базу `config/dns.db` создаёт
+DNS-мониторинг. Шаблоны-образцы — это `config/dyndns.example.json` и `config/dns-list.example.json`.
+Рабочие файлы содержат локальные данные и не попадают в репозиторий.
 
 #### `config/dyndns.json`
 
@@ -69,7 +75,13 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
     "Enabled": true,
     "Key": "V",
     "Modifiers": "Control+Shift"
-  }
+  },
+  "Sqlite": {
+    "DatabaseFile": "dns.db",
+    "MonitorEnabled": true,
+    "BrowserHistoryEnabled": true
+  },
+  "SetupDismissed": false
 }
 ```
 
@@ -80,6 +92,7 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
 | `VpnInterface` | Имя VPN-интерфейса, в который направляется трафик доменов по умолчанию. |
 | `Sqlite.DatabaseFile` | Файл базы SQLite с записанными DNS-доменами (относительный путь — рядом с exe). |
 | `Sqlite.MonitorEnabled` | Вести запись DNS-доменов при запуске приложения. |
+| `Sqlite.BrowserHistoryEnabled` | Дополнительно импортировать посещённые домены из истории браузеров. |
 | `Sync.AutoSync` | Следить за файлом списка и синхронизировать автоматически. |
 | `Hotkey.Enabled` | Включить глобальную горячую клавишу. |
 | `Hotkey.Key` | Клавиша (`A`–`Z`, `0`–`9`). |
@@ -99,6 +112,23 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
   ]
 }
 ```
+
+#### `config/dns-routes.json`
+
+Привязки доменов, добавленных из окна поиска: какой домен через какой VPN-интерфейс идёт. Классический
+список из `dns-list.json` этот файл не затрагивает — у него своя группа на роутере.
+
+```json
+{
+  "routes": [
+    { "domain": "example.com", "interface": "SSTP0" }
+  ]
+}
+```
+
+Роутер считается источником истины: при чтении его состояния расхождения переносятся сюда (например,
+если маршрут переключили в веб-интерфейсе Keenetic). Записи, которые ещё не успели синхронизироваться,
+при этом сохраняются. Пустой список означает, что привязок нет.
 
 ### Первый запуск
 
@@ -197,23 +227,28 @@ publish.ps1
 src/
   DyndDns.TrayApp/
     App.xaml(.cs)            # точка входа, каталог конфигурации, логирование
-    Models/                  # модели конфигурации и состояния роутера
+    app.manifest             # запрос прав администратора (нужен real-time ETW)
+    Models/                  # конфигурация, состояние роутера, маршруты, статистика доменов
     Services/
-      ConfigService.cs       # чтение/запись dyndns.json и dns-list.json
+      BrowserHistoryReader.cs # импорт посещённых доменов из истории браузеров
+      ConfigService.cs       # чтение/запись dyndns.json, dns-list.json и dns-routes.json
+      DnsDatabase.cs         # база SQLite с записанными доменами
+      DnsMonitor.cs          # real-time ETW-сессия Microsoft-Windows-DNS-Client
+      DnsMonitorService.cs   # батч-запись в базу и импорт истории браузеров
       DomainNormalizer.cs    # нормализация ввода в домен
       KeeneticApiService.cs  # клиент HTTP API Keenetic (RCI): вход, проверка данных, VPN-интерфейсы
       PasswordProtector.cs   # защита пароля через DPAPI
       RouterAddress.cs       # нормализация адреса роутера (поддержка схемы)
-      VpnInterfaceResolver.cs # выбор активного VPN-подключения
       RouterDiscoveryService.cs # поиск Keenetic в локальной сети
       SsdpDeviceLocator.cs   # имена устройств через UPnP/SSDP
       SyncService.cs         # фоновая очередь синхронизации и наблюдение за файлом
+      VpnInterfaceResolver.cs # выбор активного VPN-подключения
     Triggers/
       HotkeyManager.cs       # глобальная горячая клавиша
     ViewModels/
       MainViewModel.cs       # логика трея и меню
       SetupWizard.cs         # мастер первичной настройки
-    Views/                   # модальные диалоги мастера (WinForms)
+    Views/                   # диалоги мастера и окно поиска доменов (WinForms)
     config/                  # шаблоны dyndns.example.json и dns-list.example.json
 tests/
   DyndDns.TrayApp.Tests/     # модульные тесты (xUnit)
@@ -247,6 +282,8 @@ dotnet test .\tests\DyndDns.TrayApp.Tests\DyndDns.TrayApp.Tests.csproj -c Releas
   - creates/updates an FQDN group (`object-group fqdn`);
   - creates a DNS-proxy route (`dns-proxy route`) pointing those domains at the chosen VPN interface.
 - Reports sync status with the tray icon and a balloon notification.
+- Records the domains queried on this machine (DNS monitor plus the browser history) and lets you
+  search them, bind them to a VPN or drop their route right from the search window.
 
 ### Requirements
 
@@ -272,12 +309,16 @@ Publish a single self-contained `dyndns.exe` into `dist`:
 
 The script accepts `-Configuration`, `-Runtime`, and `-Output` (defaults: `Release`, `win-x64`, `dist`).
 
+The Debug build lands in `src\DyndDns.TrayApp\bin\Debug\net10.0-windows\`, while Release targets `win-x64`
+(self-contained, single file) and lands in `src\DyndDns.TrayApp\bin\Release\net10.0-windows\win-x64\`.
+
 ### Configuration
 
-Settings and the domain list live next to the executable in the `config` folder.
-The app creates `config/dyndns.json` and `config/dns-list.json` on first run; the tracked
-templates are `config/dyndns.example.json` and `config/dns-list.example.json`. Both live
-files hold local data and are not committed.
+Settings and the domain lists live next to the executable in the `config` folder. On first run the app
+creates `config/dyndns.json`, `config/dns-list.json` (the classic list) and `config/dns-routes.json`
+(domain→VPN bindings, initially empty); the DNS monitor creates its database `config/dns.db`. The tracked
+templates are `config/dyndns.example.json` and `config/dns-list.example.json`. Live files hold local data
+and are not committed.
 
 #### `config/dyndns.json`
 
@@ -296,7 +337,13 @@ files hold local data and are not committed.
     "Enabled": true,
     "Key": "V",
     "Modifiers": "Control+Shift"
-  }
+  },
+  "Sqlite": {
+    "DatabaseFile": "dns.db",
+    "MonitorEnabled": true,
+    "BrowserHistoryEnabled": true
+  },
+  "SetupDismissed": false
 }
 ```
 
@@ -307,6 +354,7 @@ files hold local data and are not committed.
 | `VpnInterface` | Default VPN interface the domains are routed through. |
 | `Sqlite.DatabaseFile` | SQLite file with the recorded DNS domains (relative paths resolve next to the exe). |
 | `Sqlite.MonitorEnabled` | Record DNS domains while the app runs. |
+| `Sqlite.BrowserHistoryEnabled` | Also import visited domains from the browser history. |
 | `Sync.AutoSync` | Watch the list file and sync automatically. |
 | `Hotkey.Enabled` | Enable the global hotkey. |
 | `Hotkey.Key` | Key (`A`–`Z`, `0`–`9`). |
@@ -329,6 +377,23 @@ files hold local data and are not committed.
   ]
 }
 ```
+
+#### `config/dns-routes.json`
+
+Bindings of the domains added from the search window: which domain goes through which VPN interface. The
+classic list in `dns-list.json` is not affected by this file — it keeps its own group on the router.
+
+```json
+{
+  "routes": [
+    { "domain": "example.com", "interface": "SSTP0" }
+  ]
+}
+```
+
+The router is treated as the source of truth: when its state is read, differences are pulled in here (for
+instance, a route switched in the Keenetic web UI). Entries that have not been synchronized yet are kept.
+An empty list means there are no bindings.
 
 ### First run
 
@@ -428,23 +493,28 @@ publish.ps1
 src/
   DyndDns.TrayApp/
     App.xaml(.cs)            # entry point, config directory, logging
-    Models/                  # config and router state models
+    app.manifest             # requests administrator rights (needed for the real-time ETW session)
+    Models/                  # config, router state, routes and domain statistics
     Services/
-      ConfigService.cs       # reads/writes dyndns.json and dns-list.json
+      BrowserHistoryReader.cs # imports visited domains from the browser history
+      ConfigService.cs       # reads/writes dyndns.json, dns-list.json and dns-routes.json
+      DnsDatabase.cs         # SQLite database of the recorded domains
+      DnsMonitor.cs          # real-time ETW session for Microsoft-Windows-DNS-Client
+      DnsMonitorService.cs   # batched writes to the database and browser history import
       DomainNormalizer.cs    # normalizes input into a domain
       KeeneticApiService.cs  # Keenetic HTTP API (RCI) client: auth, credential check, VPN interfaces
       PasswordProtector.cs   # DPAPI password protection
       RouterAddress.cs       # router address normalization (scheme support)
-      VpnInterfaceResolver.cs # picks the active VPN connection
       RouterDiscoveryService.cs # Keenetic discovery on the local network
       SsdpDeviceLocator.cs   # device names via UPnP/SSDP
       SyncService.cs         # background sync queue and file watching
+      VpnInterfaceResolver.cs # picks the active VPN connection
     Triggers/
       HotkeyManager.cs       # global hotkey
     ViewModels/
       MainViewModel.cs       # tray and menu logic
       SetupWizard.cs         # first-run setup wizard
-    Views/                   # setup wizard dialogs (WinForms)
+    Views/                   # setup wizard dialogs and the domain search window (WinForms)
     config/                  # dyndns.example.json and dns-list.example.json templates
 tests/
   DyndDns.TrayApp.Tests/     # unit tests (xUnit)
