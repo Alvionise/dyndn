@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- First-run setup wizard: scans the local network for Keenetic routers, lets the user pick a
+  device when several answer, verifies the entered credentials against the router, and stores
+  them in `config/dyndns.json`.
+- Network discovery over HTTP and HTTPS using the Keenetic `X-NDM-Challenge` / `X-NDM-Realm`
+  signature, with device names resolved best-effort through UPnP/SSDP.
+- `Настройка роутера` tray menu item to re-run the setup wizard at any time.
+- `SetupDismissed` config flag so a declined wizard does not reappear on every launch.
+- Router address may now carry an explicit `http://` or `https://` scheme.
+- Unit tests for router address normalization, discovery candidate generation, and the
+  Keenetic challenge signature.
+
 ## [0.1.0] - 2026-09-10
 
 ### Added

@@ -12,5 +12,6 @@
     "Enabled": true,
     "Key": "V",
     "Modifiers": "Control+Shift"
-  }
+  },
+  "SetupDismissed": false
 }

@@ -13,6 +13,8 @@ public class MainViewModel : INotifyPropertyChanged
     private const int ErrorNotificationMs = 5000;
 
     private readonly ConfigService _configService;
+    private readonly SetupWizard _setupWizard;
+    private readonly AppConfig _config;
     private readonly KeeneticApiService _apiService;
     private readonly SyncService _syncService;
     private readonly System.Windows.Forms.NotifyIcon _notifyIcon;
@@ -32,8 +34,9 @@ public class MainViewModel : INotifyPropertyChanged
         _configService = new ConfigService(configDir);
         _configService.EnsureConfigExists();
 
-        var config = _configService.LoadConfig();
-        _apiService = new KeeneticApiService(config.Router);
+        _config = _configService.LoadConfig();
+        _setupWizard = new SetupWizard(_configService);
+        _apiService = new KeeneticApiService(_config.Router);
         _syncService = new SyncService(_configService, _apiService);
         _syncService.SyncProgress += OnSyncProgress;
 
@@ -43,7 +46,7 @@ public class MainViewModel : INotifyPropertyChanged
         _syncIcon = LoadIcon("DyndDns.TrayApp.app.sync.ico");
         _errorIcon = LoadIcon("DyndDns.TrayApp.app.error.ico");
 
-        _shortcutKeys = ComputeShortcut(config.Hotkey);
+        _shortcutKeys = ComputeShortcut(_config.Hotkey);
 
         _contextMenu = new System.Windows.Forms.ContextMenuStrip();
         _syncMenuItem = new System.Windows.Forms.ToolStripMenuItem("Синхронизировать");
@@ -58,14 +61,14 @@ public class MainViewModel : INotifyPropertyChanged
         BuildContextMenu();
         _notifyIcon.MouseClick += OnNotifyIconClick;
 
-        if (config.Hotkey.Enabled)
+        if (_config.Hotkey.Enabled)
         {
             _hotkeyManager = new HotkeyManager(
                 // Marshal through the dispatcher so the modal dialog is never opened
                 // from inside the native hotkey hook.
                 () => Dispatch(PromptAddDomain),
-                config.Hotkey.Key,
-                config.Hotkey.Modifiers);
+                _config.Hotkey.Key,
+                _config.Hotkey.Modifiers);
             _hotkeyManager.Register();
         }
 
@@ -73,6 +76,8 @@ public class MainViewModel : INotifyPropertyChanged
 
         if (_dnsList.Domains.Count > 0)
             _syncService.RequestSync(SnapshotDnsList());
+
+        RunFirstRunSetupIfNeeded();
     }
 
     public DnsGroup? DnsList
@@ -106,6 +111,10 @@ public class MainViewModel : INotifyPropertyChanged
         _contextMenu.Items.Add(_syncMenuItem);
 
         _contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+
+        var setupItem = new System.Windows.Forms.ToolStripMenuItem("Настройка роутера");
+        setupItem.Click += (s, e) => RunSetupWizard();
+        _contextMenu.Items.Add(setupItem);
 
         var settingsItem = new System.Windows.Forms.ToolStripMenuItem("Настройки");
         settingsItem.Click += (s, e) => OpenConfig();
@@ -421,6 +430,35 @@ public class MainViewModel : INotifyPropertyChanged
         {
             UseShellExecute = true
         });
+    }
+
+    /// <summary>
+    /// Offers the setup wizard on first launch. Deferred through the dispatcher so startup settles
+    /// before a modal dialog opens on top of the freshly created tray icon.
+    /// </summary>
+    private void RunFirstRunSetupIfNeeded()
+    {
+        if (!ConfigService.SetupRequired(_config))
+            return;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+        if (dispatcher is null)
+            RunSetupWizard();
+        else
+            dispatcher.BeginInvoke(new Action(RunSetupWizard));
+    }
+
+    private void RunSetupWizard()
+    {
+        if (!_setupWizard.Run(_config))
+            return;
+
+        // Credentials changed: force the next router call to authenticate with the new values.
+        _apiService.InvalidateAuthentication();
+
+        if (_dnsList is { Domains.Count: > 0 })
+            _syncService.RequestSync(SnapshotDnsList());
     }
 
     private void Exit()

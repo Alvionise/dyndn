@@ -21,6 +21,17 @@ public sealed class KeeneticApiService : IDisposable
 {
     private const string SaveConfigurationCommand = "{\"system\":{\"configuration\":{\"save\":{}}}}";
 
+    // Shared client for one-off credential checks; it accepts self-signed router certificates
+    // and never follows redirects so an HTTP probe is not silently upgraded to HTTPS.
+    private static readonly HttpClient SharedHttpClient = new(new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+        AllowAutoRedirect = false
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(10)
+    };
+
     private readonly HttpClient _httpClient;
     private readonly RouterConfig _routerConfig;
     private bool _isAuthenticated;
@@ -38,7 +49,7 @@ public sealed class KeeneticApiService : IDisposable
         _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
     }
 
-    private string BaseUrl => $"http://{_routerConfig.Address}";
+    private string BaseUrl => RouterAddress.ToBaseUrl(_routerConfig.Address);
 
     private string RciUrl => $"{BaseUrl}/rci/";
 
@@ -170,14 +181,70 @@ public sealed class KeeneticApiService : IDisposable
         }
     }
 
-    private string ComputePasswordHash(string realm, string challenge)
+    private string ComputePasswordHash(string realm, string challenge) =>
+        ComputePasswordHash(_routerConfig.Username, realm, challenge, _routerConfig.Password);
+
+    internal static string ComputePasswordHash(string username, string realm, string challenge, string password)
     {
-        var stage1 = MD5.HashData(Encoding.UTF8.GetBytes($"{_routerConfig.Username}:{realm}:{_routerConfig.Password}"));
+        var stage1 = MD5.HashData(Encoding.UTF8.GetBytes($"{username}:{realm}:{password}"));
         var stage1Hex = Convert.ToHexString(stage1).ToLowerInvariant();
 
         var stage2 = SHA256.HashData(Encoding.UTF8.GetBytes(challenge + stage1Hex));
         return Convert.ToHexString(stage2).ToLowerInvariant();
     }
+
+    /// <summary>
+    /// Verifies credentials against any reachable Keenetic without touching the stored config.
+    /// The setup wizard calls this before persisting the router settings.
+    /// </summary>
+    public static async Task<bool> ValidateCredentialsAsync(
+        string address,
+        string username,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        var baseUrl = RouterAddress.ToBaseUrl(address);
+        if (baseUrl.Length == 0)
+            return false;
+
+        try
+        {
+            using var probe = await SharedHttpClient.GetAsync($"{baseUrl}/auth", cancellationToken).ConfigureAwait(false);
+
+            if (probe.StatusCode != HttpStatusCode.Unauthorized)
+                return probe.IsSuccessStatusCode;
+
+            var challenge = GetHeader(probe, "X-NDM-Challenge");
+            var realm = GetHeader(probe, "X-NDM-Realm");
+
+            if (string.IsNullOrEmpty(challenge) || string.IsNullOrEmpty(realm))
+                return false;
+
+            var passwordHash = ComputePasswordHash(username, realm, challenge, password);
+            using var content = new StringContent(
+                JsonSerializer.Serialize(new { login = username, password = passwordHash }),
+                Encoding.UTF8,
+                "application/json");
+
+            using var response = await SharedHttpClient.PostAsync($"{baseUrl}/auth", content, cancellationToken).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"Keenetic credential validation failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Drops the cached authentication so the next request re-authenticates with the current
+    /// <see cref="RouterConfig"/> values, e.g. after the setup wizard replaced them.
+    /// </summary>
+    public void InvalidateAuthentication() => _isAuthenticated = false;
 
     private async Task<RouterState> GetRouterStateAsync()
     {

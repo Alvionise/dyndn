@@ -26,6 +26,20 @@ public class ConfigService
     public string ConfigPath => _configPath;
     public string DnsListPath => _dnsListPath;
 
+    /// <summary>
+    /// A router counts as configured once both an address and a password are present.
+    /// </summary>
+    public static bool IsRouterConfigured(AppConfig config) =>
+        !string.IsNullOrWhiteSpace(config.Router.Address) &&
+        !string.IsNullOrWhiteSpace(config.Router.Password);
+
+    /// <summary>
+    /// The first-run wizard is offered while the router is unconfigured and the user has not
+    /// already dismissed it.
+    /// </summary>
+    public static bool SetupRequired(AppConfig config) =>
+        !IsRouterConfigured(config) && !config.SetupDismissed;
+
     public AppConfig LoadConfig()
     {
         if (File.Exists(_configPath))

@@ -15,6 +15,7 @@ A lightweight Windows tray app that syncs a local domain list to a **Keenetic** 
 - Живёт в системном трее и не мешает работе — отдельного окна нет.
 - Хранит список доменов в файле `config/dns-list.json`.
 - По горячей клавише или из меню трея добавляет/удаляет домены прямо во время работы.
+- При первом запуске самостоятельно ищет роутер Keenetic в сети и предлагает ввести логин и пароль.
 - При каждом изменении списка автоматически синхронизирует его с роутером Keenetic через HTTP API (RCI):
   - создаёт/обновляет группу FQDN (`object-group fqdn`);
   - создаёт маршрут DNS-прокси (`dns-proxy route`), направляя эти домены в указанный VPN-интерфейс.
@@ -79,6 +80,7 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
 | `Hotkey.Enabled` | Включить глобальную горячую клавишу. |
 | `Hotkey.Key` | Клавиша (`A`–`Z`, `0`–`9`). |
 | `Hotkey.Modifiers` | Модификаторы через `+`: `Control`, `Shift`, `Alt`, `Win`. |
+| `SetupDismissed` | Мастер первого запуска был отменён и больше не показывается автоматически. |
 
 > Пароль роутера шифруется при сохранении средствами Windows DPAPI (область текущего пользователя) и хранится в виде значения с префиксом `dpapi:`. Значение без этого префикса считается старым открытым паролем и принимается как есть. Копия конфига на другом компьютере или под другой учётной записью не расшифруется — пароль придётся ввести заново.
 
@@ -94,6 +96,21 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
 }
 ```
 
+### Первый запуск
+
+Если в `config/dyndns.json` не указан пароль роутера, приложение предлагает мастер настройки:
+
+1. Мастер сканирует сеть: сначала типовые адреса (`192.168.1.1`, `192.168.0.1`, `192.168.10.1`,
+   `10.0.0.1`, `my.keenetic.net`), затем все локальные IPv4-подсети. Проверяются HTTP и HTTPS,
+   а признаком Keenetic служит ответ `401` с заголовком `X-NDM-Challenge` или `X-NDM-Realm`.
+2. Если найдено несколько роутеров, показывается список с именами устройств (best-effort через
+   UPnP/SSDP) и возможность ввести адрес вручную.
+3. Введённые логин и пароль проверяются на роутере; при ошибке окно ввода повторяется, при успехе
+   данные сохраняются в `config/dyndns.json`.
+
+Мастер можно отменить: тогда он больше не появится сам, а конфиг можно заполнить вручную
+(пункт **Настройки** в меню трея). Запустить мастер повторно можно пунктом **Настройка роутера**.
+
 ### Использование
 
 1. Запустите `dyndns.exe` — иконка появится в системном трее.
@@ -101,6 +118,7 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
    - **Добавить домен...** — добавить домен (или нажать горячую клавишу, по умолчанию `Ctrl+Shift+V`);
    - **Домены (N)** — просмотр и удаление отдельных доменов;
    - **Синхронизировать** — принудительная синхронизация;
+   - **Настройка роутера** — повторно найти роутер и ввести логин с паролем;
    - **Настройки** — открыть `dyndns.json`;
    - **Открыть список** — открыть `dns-list.json`;
    - **Выход** — завершить приложение.
@@ -124,13 +142,18 @@ src/
     Services/
       ConfigService.cs       # чтение/запись dyndns.json и dns-list.json
       DomainNormalizer.cs    # нормализация ввода в домен
-      KeeneticApiService.cs  # клиент HTTP API Keenetic (RCI)
+      KeeneticApiService.cs  # клиент HTTP API Keenetic (RCI) и проверка учётных данных
       PasswordProtector.cs   # защита пароля через DPAPI
+      RouterAddress.cs       # нормализация адреса роутера (поддержка схемы)
+      RouterDiscoveryService.cs # поиск Keenetic в локальной сети
+      SsdpDeviceLocator.cs   # имена устройств через UPnP/SSDP
       SyncService.cs         # фоновая очередь синхронизации и наблюдение за файлом
     Triggers/
       HotkeyManager.cs       # глобальная горячая клавиша
     ViewModels/
       MainViewModel.cs       # логика трея и меню
+      SetupWizard.cs         # мастер первичной настройки
+    Views/                   # модальные диалоги мастера (WinForms)
     config/                  # шаблоны dyndns.example.json и dns-list.example.json
 tests/
   DyndDns.TrayApp.Tests/     # модульные тесты (xUnit)
@@ -159,6 +182,7 @@ dotnet test .\tests\DyndDns.TrayApp.Tests\DyndDns.TrayApp.Tests.csproj -c Releas
 - Lives in the Windows system tray with no visible window.
 - Keeps the domain list in `config/dns-list.json`.
 - Adds/removes domains at runtime via a hotkey or the tray menu.
+- On first run it scans the network for a Keenetic router and asks for the administrator credentials.
 - On every list change it automatically syncs the list to the Keenetic router over its HTTP API (RCI):
   - creates/updates an FQDN group (`object-group fqdn`);
   - creates a DNS-proxy route (`dns-proxy route`) pointing those domains at the chosen VPN interface.
@@ -223,6 +247,7 @@ files hold local data and are not committed.
 | `Hotkey.Enabled` | Enable the global hotkey. |
 | `Hotkey.Key` | Key (`A`–`Z`, `0`–`9`). |
 | `Hotkey.Modifiers` | `+`-separated modifiers: `Control`, `Shift`, `Alt`, `Win`. |
+| `SetupDismissed` | The first-run wizard was declined and is no longer shown automatically. |
 
 > The router password is encrypted at rest with Windows DPAPI (current-user scope) and stored
 > with a `dpapi:` prefix. A value without that prefix is treated as legacy plaintext and accepted
@@ -241,6 +266,22 @@ files hold local data and are not committed.
 }
 ```
 
+### First run
+
+When `config/dyndns.json` has no router password, the app offers a setup wizard:
+
+1. The wizard scans the network: first the well-known addresses (`192.168.1.1`, `192.168.0.1`,
+   `192.168.10.1`, `10.0.0.1`, `my.keenetic.net`), then every local IPv4 subnet, probing both HTTP
+   and HTTPS. A Keenetic is recognized by a `401` response carrying the `X-NDM-Challenge` or
+   `X-NDM-Realm` header.
+2. When several routers answer, a list with device names (best-effort via UPnP/SSDP) is shown
+   along with a manual address entry.
+3. The entered login and password are verified against the router; on failure the prompt is shown
+   again, and on success the credentials are saved to `config/dyndns.json`.
+
+The wizard can be cancelled: it will not appear on its own again, and the config can be filled in
+by hand (the **Settings** tray item). Use the **Router setup** tray item to run it again.
+
 ### Usage
 
 1. Run `dyndns.exe` — the tray icon appears.
@@ -248,6 +289,7 @@ files hold local data and are not committed.
    - **Add domain...** — add a domain (or press the hotkey, `Ctrl+Shift+V` by default);
    - **Domains (N)** — view and remove individual domains;
    - **Synchronize** — force a sync;
+   - **Router setup** — find the router again and enter the login and password;
    - **Settings** — open `dyndns.json`;
    - **Open list** — open `dns-list.json`;
    - **Exit** — quit the app.
@@ -271,13 +313,18 @@ src/
     Services/
       ConfigService.cs       # reads/writes dyndns.json and dns-list.json
       DomainNormalizer.cs    # normalizes input into a domain
-      KeeneticApiService.cs  # Keenetic HTTP API (RCI) client
+      KeeneticApiService.cs  # Keenetic HTTP API (RCI) client and credential check
       PasswordProtector.cs   # DPAPI password protection
+      RouterAddress.cs       # router address normalization (scheme support)
+      RouterDiscoveryService.cs # Keenetic discovery on the local network
+      SsdpDeviceLocator.cs   # device names via UPnP/SSDP
       SyncService.cs         # background sync queue and file watching
     Triggers/
       HotkeyManager.cs       # global hotkey
     ViewModels/
       MainViewModel.cs       # tray and menu logic
+      SetupWizard.cs         # first-run setup wizard
+    Views/                   # setup wizard dialogs (WinForms)
     config/                  # dyndns.example.json and dns-list.example.json templates
 tests/
   DyndDns.TrayApp.Tests/     # unit tests (xUnit)

@@ -25,4 +25,10 @@ public class AppConfig
     public string VpnInterface { get; set; } = string.Empty;
     public SyncConfig Sync { get; set; } = new();
     public HotkeyConfig Hotkey { get; set; } = new();
+
+    /// <summary>
+    /// Set when the user declines the first-run setup wizard, so it is not shown again
+    /// on every launch. Cleared once valid router credentials are saved.
+    /// </summary>
+    public bool SetupDismissed { get; set; }
 }
