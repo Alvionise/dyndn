@@ -77,4 +77,43 @@ public class VpnInterfaceTests
     [Fact]
     public void PickActive_ReturnsNullWhenThereAreNoInterfaces() =>
         Assert.Null(VpnInterfaceResolver.PickActive(new List<VpnInterfaceInfo>()));
+
+    [Fact]
+    public void PickPreferred_KeepsConfiguredInterfaceWhileItExists()
+    {
+        var interfaces = new List<VpnInterfaceInfo>
+        {
+            new("L2TP0", "L2TP", string.Empty, true, string.Empty),
+            new("SSTP0", "SSTP", string.Empty, false, string.Empty)
+        };
+
+        Assert.Equal("SSTP0", VpnInterfaceResolver.PickPreferred(interfaces, "SSTP0")?.Name);
+    }
+
+    [Fact]
+    public void PickPreferred_FallsBackToConnectedWhenConfiguredIsGone()
+    {
+        var interfaces = new List<VpnInterfaceInfo>
+        {
+            new("L2TP0", "L2TP", string.Empty, false, string.Empty),
+            new("SSTP0", "SSTP", string.Empty, true, string.Empty)
+        };
+
+        Assert.Equal("SSTP0", VpnInterfaceResolver.PickPreferred(interfaces, "OpenVPN0")?.Name);
+    }
+
+    [Fact]
+    public void PickPreferred_ReturnsFirstWhenNothingIsConfiguredOrConnected()
+    {
+        var interfaces = new List<VpnInterfaceInfo>
+        {
+            new("L2TP0", "L2TP", string.Empty, false, string.Empty)
+        };
+
+        Assert.Equal("L2TP0", VpnInterfaceResolver.PickPreferred(interfaces, null)?.Name);
+    }
+
+    [Fact]
+    public void PickPreferred_ReturnsNullWhenThereAreNoInterfaces() =>
+        Assert.Null(VpnInterfaceResolver.PickPreferred(new List<VpnInterfaceInfo>(), "L2TP0"));
 }

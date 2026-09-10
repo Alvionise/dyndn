@@ -123,6 +123,8 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
   (в веб-интерфейсе) и нажмите **Обновить VPN**.
 - Пункт **Обновить VPN** в меню трея заново читает подключения и обновляет конфиг; при смене
   интерфейса запускается синхронизация.
+- Если подключений несколько, появляется список с типом и состоянием каждого — можно выбрать
+  конкретное. Автоматически (при старте) сохраняется уже настроенный интерфейс, пока он существует.
 - Если найденное подключение не установлено, приложение предупредит об этом.
 
 Секреты VPN (логины, пароли, ключи) приложением не читаются и в `config/dyndns.json` не сохраняются —
@@ -313,6 +315,8 @@ leaves through the current tunnel.
   and press **Refresh VPN**.
 - The **Refresh VPN** tray item re-reads the connections and updates the config; a sync is triggered
   when the interface changed.
+- When several connections exist, a list with each one's type and state is shown so a specific
+  connection can be picked. On startup the configured interface is kept while it still exists.
 - When the found connection is not established, the app warns about it.
 
 VPN secrets (logins, passwords, keys) are never read or stored — `config/dyndns.json` keeps only the

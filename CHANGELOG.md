@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notification asks the user to create one.
 - `Обновить VPN` / `Refresh VPN` tray item to re-read the router's VPN connections and update the
   config; routing is re-synced when the interface changes.
+- When several VPN connections exist, the refresh action shows a pick list with each connection's
+  type and state, while startup keeps the configured interface as long as it still exists.
 - Unit tests for interface parsing, VPN interface detection, and picking the active connection.
 
 - First-run setup wizard: scans the local network for Keenetic routers, lets the user pick a

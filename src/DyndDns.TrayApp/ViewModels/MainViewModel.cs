@@ -4,6 +4,7 @@ using System.IO;
 using DyndDns.TrayApp.Models;
 using DyndDns.TrayApp.Services;
 using DyndDns.TrayApp.Triggers;
+using DyndDns.TrayApp.Views;
 
 namespace DyndDns.TrayApp.ViewModels;
 
@@ -83,9 +84,9 @@ public class MainViewModel : INotifyPropertyChanged
         var startupDispatcher = System.Windows.Application.Current?.Dispatcher;
 
         if (startupDispatcher is null)
-            RefreshVpnInterface(verbose: false);
+            RefreshVpnInterface(interactive: false);
         else
-            startupDispatcher.BeginInvoke(new Action(() => RefreshVpnInterface(verbose: false)));
+            startupDispatcher.BeginInvoke(new Action(() => RefreshVpnInterface(interactive: false)));
     }
 
     public DnsGroup? DnsList
@@ -125,7 +126,7 @@ public class MainViewModel : INotifyPropertyChanged
         _contextMenu.Items.Add(setupItem);
 
         var refreshVpnItem = new System.Windows.Forms.ToolStripMenuItem("Обновить VPN");
-        refreshVpnItem.Click += (s, e) => RefreshVpnInterface(verbose: true);
+        refreshVpnItem.Click += (s, e) => RefreshVpnInterface(interactive: true);
         _contextMenu.Items.Add(refreshVpnItem);
 
         var settingsItem = new System.Windows.Forms.ToolStripMenuItem("Настройки");
@@ -469,25 +470,28 @@ public class MainViewModel : INotifyPropertyChanged
         // Credentials changed: force the next router call to authenticate with the new values.
         _apiService.InvalidateAuthentication();
 
-        RefreshVpnInterface(verbose: false);
+        RefreshVpnInterface(interactive: false);
     }
 
     /// <summary>
     /// Reads the router's VPN connections and keeps <see cref="AppConfig.VpnInterface"/> pointing at
     /// the active one. The router call runs on the thread pool and the result is marshalled back
-    /// through the dispatcher, so the UI thread is never blocked. When the connection changed, a
-    /// sync is requested so the routing follows the new interface.
+    /// through the dispatcher, so the UI thread is never blocked.
+    ///
+    /// When <paramref name="interactive"/> is set (the tray menu action) and several connections
+    /// exist, the user picks one. Otherwise the configured connection is kept while it is still
+    /// present, falling back to the active one. A change is saved and re-synced.
     /// </summary>
-    private void RefreshVpnInterface(bool verbose)
+    private void RefreshVpnInterface(bool interactive)
     {
         if (string.IsNullOrWhiteSpace(_config.Router.Address) || string.IsNullOrWhiteSpace(_config.Router.Password))
             return;
 
         _ = Task.Run(() => _apiService.GetVpnInterfacesAsync())
-            .ContinueWith(task => Dispatch(() => ApplyVpnInterfaces(task, verbose)), TaskScheduler.Default);
+            .ContinueWith(task => Dispatch(() => ApplyVpnInterfaces(task, interactive)), TaskScheduler.Default);
     }
 
-    private void ApplyVpnInterfaces(Task<List<VpnInterfaceInfo>> task, bool verbose)
+    private void ApplyVpnInterfaces(Task<List<VpnInterfaceInfo>> task, bool interactive)
     {
         if (task.IsFaulted)
         {
@@ -495,13 +499,22 @@ public class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        var active = VpnInterfaceResolver.PickActive(task.Result);
+        var interfaces = task.Result;
 
-        if (active is null)
+        if (interfaces.Count == 0)
         {
             ShowNotification("VPN-подключение не найдено. Создайте его на роутере и выберите «Обновить VPN».", ErrorNotificationMs);
             return;
         }
+
+        var active = interfaces.Count == 1
+            ? interfaces[0]
+            : interactive
+                ? PromptVpnInterfaceSelection(interfaces)
+                : VpnInterfaceResolver.PickPreferred(interfaces, _config.VpnInterface);
+
+        if (active is null)
+            return;
 
         var changed = !string.Equals(_config.VpnInterface, active.Name, StringComparison.OrdinalIgnoreCase);
 
@@ -513,11 +526,20 @@ public class MainViewModel : INotifyPropertyChanged
 
         if (!active.IsUp)
             ShowNotification($"VPN {active.Name} не подключён. Проверьте настройки подключения.", ErrorNotificationMs);
-        else if (verbose)
+        else if (interactive)
             ShowNotification($"VPN-интерфейс: {active.Name}", SuccessNotificationMs);
 
         if (changed && _dnsList is { Domains.Count: > 0 })
             _syncService.RequestSync(SnapshotDnsList());
+    }
+
+    private VpnInterfaceInfo? PromptVpnInterfaceSelection(IReadOnlyList<VpnInterfaceInfo> interfaces)
+    {
+        using var dialog = new VpnInterfaceDialog(interfaces, _config.VpnInterface);
+
+        return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK
+            ? dialog.SelectedInterface
+            : null;
     }
 
     private void Exit()
