@@ -78,6 +78,14 @@ public class MainViewModel : INotifyPropertyChanged
             _syncService.RequestSync(SnapshotDnsList());
 
         RunFirstRunSetupIfNeeded();
+
+        // Deferred so the tray icon and startup finish before the router is contacted.
+        var startupDispatcher = System.Windows.Application.Current?.Dispatcher;
+
+        if (startupDispatcher is null)
+            RefreshVpnInterface(verbose: false);
+        else
+            startupDispatcher.BeginInvoke(new Action(() => RefreshVpnInterface(verbose: false)));
     }
 
     public DnsGroup? DnsList
@@ -115,6 +123,10 @@ public class MainViewModel : INotifyPropertyChanged
         var setupItem = new System.Windows.Forms.ToolStripMenuItem("Настройка роутера");
         setupItem.Click += (s, e) => RunSetupWizard();
         _contextMenu.Items.Add(setupItem);
+
+        var refreshVpnItem = new System.Windows.Forms.ToolStripMenuItem("Обновить VPN");
+        refreshVpnItem.Click += (s, e) => RefreshVpnInterface(verbose: true);
+        _contextMenu.Items.Add(refreshVpnItem);
 
         var settingsItem = new System.Windows.Forms.ToolStripMenuItem("Настройки");
         settingsItem.Click += (s, e) => OpenConfig();
@@ -457,7 +469,54 @@ public class MainViewModel : INotifyPropertyChanged
         // Credentials changed: force the next router call to authenticate with the new values.
         _apiService.InvalidateAuthentication();
 
-        if (_dnsList is { Domains.Count: > 0 })
+        RefreshVpnInterface(verbose: false);
+    }
+
+    /// <summary>
+    /// Reads the router's VPN connections and keeps <see cref="AppConfig.VpnInterface"/> pointing at
+    /// the active one. The router call runs on the thread pool and the result is marshalled back
+    /// through the dispatcher, so the UI thread is never blocked. When the connection changed, a
+    /// sync is requested so the routing follows the new interface.
+    /// </summary>
+    private void RefreshVpnInterface(bool verbose)
+    {
+        if (string.IsNullOrWhiteSpace(_config.Router.Address) || string.IsNullOrWhiteSpace(_config.Router.Password))
+            return;
+
+        _ = Task.Run(() => _apiService.GetVpnInterfacesAsync())
+            .ContinueWith(task => Dispatch(() => ApplyVpnInterfaces(task, verbose)), TaskScheduler.Default);
+    }
+
+    private void ApplyVpnInterfaces(Task<List<VpnInterfaceInfo>> task, bool verbose)
+    {
+        if (task.IsFaulted)
+        {
+            System.Diagnostics.Trace.TraceError($"VPN interface lookup failed: {task.Exception}");
+            return;
+        }
+
+        var active = VpnInterfaceResolver.PickActive(task.Result);
+
+        if (active is null)
+        {
+            ShowNotification("VPN-подключение не найдено. Создайте его на роутере и выберите «Обновить VPN».", ErrorNotificationMs);
+            return;
+        }
+
+        var changed = !string.Equals(_config.VpnInterface, active.Name, StringComparison.OrdinalIgnoreCase);
+
+        if (changed)
+        {
+            _config.VpnInterface = active.Name;
+            _configService.SaveConfig(_config);
+        }
+
+        if (!active.IsUp)
+            ShowNotification($"VPN {active.Name} не подключён. Проверьте настройки подключения.", ErrorNotificationMs);
+        else if (verbose)
+            ShowNotification($"VPN-интерфейс: {active.Name}", SuccessNotificationMs);
+
+        if (changed && _dnsList is { Domains.Count: > 0 })
             _syncService.RequestSync(SnapshotDnsList());
     }
 

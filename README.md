@@ -107,9 +107,26 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
    UPnP/SSDP) и возможность ввести адрес вручную.
 3. Введённые логин и пароль проверяются на роутере; при ошибке окно ввода повторяется, при успехе
    данные сохраняются в `config/dyndns.json`.
+4. После входа приложение читает VPN-подключения роутера и записывает активное в `VpnInterface`.
+   Если подключений нет, появляется уведомление с просьбой создать VPN на роутере.
 
 Мастер можно отменить: тогда он больше не появится сам, а конфиг можно заполнить вручную
 (пункт **Настройки** в меню трея). Запустить мастер повторно можно пунктом **Настройка роутера**.
+
+### VPN-интерфейс
+
+Приложение не создаёт VPN-подключения: оно только читает список интерфейсов роутера (`show interface`),
+выбирает подключённое (или первое найденное) и сохраняет его имя в `VpnInterface`. Так трафик доменов
+уходит в актуальный туннель.
+
+- Если ни одного VPN-подключения нет, появляется уведомление — создайте подключение на роутере
+  (в веб-интерфейсе) и нажмите **Обновить VPN**.
+- Пункт **Обновить VPN** в меню трея заново читает подключения и обновляет конфиг; при смене
+  интерфейса запускается синхронизация.
+- Если найденное подключение не установлено, приложение предупредит об этом.
+
+Секреты VPN (логины, пароли, ключи) приложением не читаются и в `config/dyndns.json` не сохраняются —
+там остаётся только имя интерфейса.
 
 ### Использование
 
@@ -119,6 +136,7 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
    - **Домены (N)** — просмотр и удаление отдельных доменов;
    - **Синхронизировать** — принудительная синхронизация;
    - **Настройка роутера** — повторно найти роутер и ввести логин с паролем;
+   - **Обновить VPN** — перечитать VPN-подключения роутера и обновить конфиг;
    - **Настройки** — открыть `dyndns.json`;
    - **Открыть список** — открыть `dns-list.json`;
    - **Выход** — завершить приложение.
@@ -142,9 +160,10 @@ src/
     Services/
       ConfigService.cs       # чтение/запись dyndns.json и dns-list.json
       DomainNormalizer.cs    # нормализация ввода в домен
-      KeeneticApiService.cs  # клиент HTTP API Keenetic (RCI) и проверка учётных данных
+      KeeneticApiService.cs  # клиент HTTP API Keenetic (RCI): вход, проверка данных, VPN-интерфейсы
       PasswordProtector.cs   # защита пароля через DPAPI
       RouterAddress.cs       # нормализация адреса роутера (поддержка схемы)
+      VpnInterfaceResolver.cs # выбор активного VPN-подключения
       RouterDiscoveryService.cs # поиск Keenetic в локальной сети
       SsdpDeviceLocator.cs   # имена устройств через UPnP/SSDP
       SyncService.cs         # фоновая очередь синхронизации и наблюдение за файлом
@@ -278,9 +297,26 @@ When `config/dyndns.json` has no router password, the app offers a setup wizard:
    along with a manual address entry.
 3. The entered login and password are verified against the router; on failure the prompt is shown
    again, and on success the credentials are saved to `config/dyndns.json`.
+4. After signing in, the app reads the router's VPN connections and stores the active one in
+   `VpnInterface`. When there are none, a notification asks you to create one.
 
 The wizard can be cancelled: it will not appear on its own again, and the config can be filled in
 by hand (the **Settings** tray item). Use the **Router setup** tray item to run it again.
+
+### VPN interface
+
+The app never creates VPN connections: it only reads the router's interface list (`show interface`),
+picks a connected one (or the first found) and saves its name to `VpnInterface`, so domain traffic
+leaves through the current tunnel.
+
+- When no VPN connection exists, a notification asks you to create one on the router (in its web UI)
+  and press **Refresh VPN**.
+- The **Refresh VPN** tray item re-reads the connections and updates the config; a sync is triggered
+  when the interface changed.
+- When the found connection is not established, the app warns about it.
+
+VPN secrets (logins, passwords, keys) are never read or stored — `config/dyndns.json` keeps only the
+interface name.
 
 ### Usage
 
@@ -290,6 +326,7 @@ by hand (the **Settings** tray item). Use the **Router setup** tray item to run 
    - **Domains (N)** — view and remove individual domains;
    - **Synchronize** — force a sync;
    - **Router setup** — find the router again and enter the login and password;
+   - **Refresh VPN** — re-read the router's VPN connections and update the config;
    - **Settings** — open `dyndns.json`;
    - **Open list** — open `dns-list.json`;
    - **Exit** — quit the app.
@@ -313,9 +350,10 @@ src/
     Services/
       ConfigService.cs       # reads/writes dyndns.json and dns-list.json
       DomainNormalizer.cs    # normalizes input into a domain
-      KeeneticApiService.cs  # Keenetic HTTP API (RCI) client and credential check
+      KeeneticApiService.cs  # Keenetic HTTP API (RCI) client: auth, credential check, VPN interfaces
       PasswordProtector.cs   # DPAPI password protection
       RouterAddress.cs       # router address normalization (scheme support)
+      VpnInterfaceResolver.cs # picks the active VPN connection
       RouterDiscoveryService.cs # Keenetic discovery on the local network
       SsdpDeviceLocator.cs   # device names via UPnP/SSDP
       SyncService.cs         # background sync queue and file watching

@@ -21,6 +21,12 @@ public sealed class KeeneticApiService : IDisposable
 {
     private const string SaveConfigurationCommand = "{\"system\":{\"configuration\":{\"save\":{}}}}";
 
+    // Interface name prefixes (and reported types) that identify a VPN client connection.
+    private static readonly string[] VpnInterfacePrefixes =
+    {
+        "L2TP", "PPTP", "SSTP", "Wireguard", "OpenVPN", "IPsec", "IKEv2"
+    };
+
     // Shared client for one-off credential checks; it accepts self-signed router certificates
     // and never follows redirects so an HTTP probe is not silently upgraded to HTTPS.
     private static readonly HttpClient SharedHttpClient = new(new HttpClientHandler
@@ -486,6 +492,64 @@ public sealed class KeeneticApiService : IDisposable
                 }
             }
         });
+
+    /// <summary>
+    /// VPN-capable interfaces reported by the router, in a stable order. Used to keep
+    /// <see cref="Models.AppConfig.VpnInterface"/> pointing at a connection that really exists.
+    /// </summary>
+    public async Task<List<VpnInterfaceInfo>> GetVpnInterfacesAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+            throw new InvalidOperationException("Authentication failed");
+
+        var body = await SendRciAsync("[{\"show\":{\"interface\":{}}}]");
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        if (root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0)
+            root = root[0];
+
+        if (!root.TryGetProperty("show", out var show) || !show.TryGetProperty("interface", out var interfaces))
+            return new List<VpnInterfaceInfo>();
+
+        return ParseInterfaces(interfaces)
+            .Where(item => IsVpnInterface(item.Name, item.Type))
+            .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    internal static List<VpnInterfaceInfo> ParseInterfaces(JsonElement interfaces)
+    {
+        var result = new List<VpnInterfaceInfo>();
+
+        if (interfaces.ValueKind != JsonValueKind.Object)
+            return result;
+
+        foreach (var property in interfaces.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var connected = GetString(property.Value, "connected");
+            var state = GetString(property.Value, "state");
+            var isUp = string.Equals(connected, "yes", StringComparison.OrdinalIgnoreCase) ||
+                (connected.Length == 0 && string.Equals(state, "up", StringComparison.OrdinalIgnoreCase));
+
+            result.Add(new VpnInterfaceInfo(
+                property.Name,
+                GetString(property.Value, "type"),
+                GetString(property.Value, "description"),
+                isUp,
+                GetString(property.Value, "address")));
+        }
+
+        return result;
+    }
+
+    internal static bool IsVpnInterface(string name, string type) =>
+        VpnInterfacePrefixes.Any(prefix =>
+            name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            type.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
     public void Dispose() => _httpClient.Dispose();
 }
