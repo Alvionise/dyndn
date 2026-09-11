@@ -12,6 +12,12 @@
 *.md text eol=lf
 *.ps1 text eol=crlf
 
+# The files that configure the tools are read by them, so they keep LF as well: the catch-all rule above
+# would check them out as CRLF and make git warn on every commit.
+.editorconfig text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
 # Binary assets must never be touched by line-ending conversion.
 *.ico binary
 *.png binary
@@ -19,7 +25,3 @@
 *.exe binary
 *.dll binary
 *.zip binary
-
-# Keep diffs readable for generated-looking files.
-*.min.js -diff
-*.min.css -diff

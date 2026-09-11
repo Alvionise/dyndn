@@ -19,6 +19,9 @@ jobs:
       - name: Restore
         run: dotnet restore .\dyndn.slnx
 
+      - name: Check code style
+        run: dotnet format .\dyndn.slnx --verify-no-changes --no-restore
+
       - name: Build
         run: dotnet build .\dyndn.slnx -c Release --no-restore
 

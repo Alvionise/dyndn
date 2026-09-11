@@ -1,80 +1,62 @@
 using System.Diagnostics;
-using System.IO;
 using DyndDns.TrayApp.Models;
 
 namespace DyndDns.TrayApp.Services;
 
-public enum SyncStatus
+internal enum SyncStatus
 {
     Running,
     Success,
     Error
 }
 
-public readonly record struct SyncNotification(SyncStatus Status, string Message);
+internal readonly record struct SyncNotification(SyncStatus Status, string Message);
 
 /// <summary>
-/// Serializes synchronization on a single background worker. Requests are coalesced:
-/// while a sync is running, additional requests collapse into at most one follow-up run
-/// that uses the latest domain list. This keeps the UI thread free and avoids overlapping
-/// router calls.
+/// Serializes synchronization on a single background worker. Requests are coalesced and handled per
+/// router profile: the domains of a profile are pushed to its own router through its own session, and a
+/// router that fails (unreachable, wrong credentials) does not stop the others.
 /// </summary>
-public sealed class SyncService : IDisposable
+internal sealed class SyncService : IDisposable
 {
-    private static readonly TimeSpan SelfWriteGracePeriod = TimeSpan.FromSeconds(2);
-
-    private readonly ConfigService _configService;
-    private readonly KeeneticApiService _apiService;
+    private readonly SettingsStore _settings;
+    private readonly RouterApiPool _apiPool;
     private readonly SemaphoreSlim _wake = new(0, 1);
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly object _pendingLock = new();
-    private readonly object _watcherLock = new();
+    private readonly Lock _queueLock = new();
+    private readonly HashSet<int> _queuedRouters = [];
+    private readonly Task _worker;
 
-    private DnsGroup? _pendingGroup;
-    private FileSystemWatcher? _watcher;
-    private CancellationTokenSource? _debounceCts;
-    private long _lastSelfWriteTicks;
+    private bool _queueAll;
+    private volatile bool _isSyncing;
 
     public event Action<SyncNotification>? SyncProgress;
 
-    public SyncService(ConfigService configService, KeeneticApiService apiService)
-    {
-        _configService = configService;
-        _apiService = apiService;
-        _ = Task.Run(RunWorkerAsync);
-    }
-
-    public void StartWatching()
-    {
-        if (!_configService.LoadConfig().Sync.AutoSync)
-            return;
-
-        var directory = Path.GetDirectoryName(_configService.DnsListPath) ?? Directory.GetCurrentDirectory();
-
-        _watcher = new FileSystemWatcher(directory, "dns-list.json")
-        {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName
-        };
-        _watcher.Changed += OnDnsListChanged;
-        _watcher.EnableRaisingEvents = true;
-    }
+    /// <summary>Raised after a profile was processed, so views can re-read that router's state.</summary>
+    public event Action<int>? SyncCompleted;
 
     /// <summary>
-    /// Saves the DNS list while the watcher ignores the resulting file event, then syncs.
-    /// Prevents the save that the app performed from triggering a second, redundant sync.
+    /// True while a run is in progress or another one is queued, i.e. local changes have not reached the
+    /// routers yet. Readers of the router state must not treat it as the truth in the meantime.
     /// </summary>
-    public void PersistAndSync(Action persist, DnsGroup group)
+    public bool IsBusy => _isSyncing || _wake.CurrentCount > 0;
+
+    public SyncService(SettingsStore settings, RouterApiPool apiPool)
     {
-        Interlocked.Exchange(ref _lastSelfWriteTicks, DateTime.UtcNow.Ticks);
-        persist();
-        RequestSync(group);
+        _settings = settings;
+        _apiPool = apiPool;
+        _worker = Task.Run(RunWorkerAsync);
     }
 
-    public void RequestSync(DnsGroup? group = null)
+    /// <summary>Queues one profile, or every profile when <paramref name="routerId"/> is null.</summary>
+    public void RequestSync(int? routerId = null)
     {
-        lock (_pendingLock)
+        lock (_queueLock)
         {
-            _pendingGroup = group ?? _pendingGroup;
+            if (routerId is { } id)
+                _queuedRouters.Add(id);
+            else
+                _queueAll = true;
         }
 
         try
@@ -83,7 +65,7 @@ public sealed class SyncService : IDisposable
         }
         catch (SemaphoreFullException)
         {
-            // A wake-up is already pending; the worker will pick up the latest group.
+            // A wake-up is already pending; the worker picks up the latest queue.
         }
     }
 
@@ -100,58 +82,109 @@ public sealed class SyncService : IDisposable
                 return;
             }
 
-            DnsGroup? group;
-            lock (_pendingLock)
+            try
             {
-                group = _pendingGroup;
+                await SyncAsync();
             }
-
-            await SyncAsync(group);
+            catch (Exception ex)
+            {
+                // A round that fails outside the per-router handling must not take the worker down:
+                // requests would keep being accepted and never handled, with nothing said to the user.
+                Trace.TraceError($"Synchronization round failed: {ex}");
+                Notify(SyncStatus.Error, $"Не удалось выполнить синхронизацию: {ex.Message}");
+            }
         }
     }
 
-    private async Task SyncAsync(DnsGroup? group)
+    private async Task SyncAsync()
+    {
+        List<int?> targets;
+
+        lock (_queueLock)
+        {
+            targets = _queueAll
+                ? [null]
+                : [.. _queuedRouters.Select(id => (int?)id)];
+
+            _queueAll = false;
+            _queuedRouters.Clear();
+        }
+
+        _isSyncing = true;
+
+        try
+        {
+            foreach (var target in targets)
+                await SyncTargetAsync(target);
+        }
+        finally
+        {
+            _isSyncing = false;
+        }
+    }
+
+    private async Task SyncTargetAsync(int? routerId)
+    {
+        var profiles = routerId is { } id
+            ? [.. _settings.GetRouters().Where(profile => profile.Id == id)]
+            : _settings.GetRouters();
+
+        // Nothing to push and nothing to tell: the window shows its own empty state, and an error balloon for
+        // "there is no router yet" would greet the user every time it is opened on a fresh installation.
+        if (profiles.Count == 0)
+            return;
+
+        foreach (var profile in profiles)
+            await SyncProfileAsync(profile);
+    }
+
+    /// <summary>
+    /// Pushes the domains bound to one profile: per VPN interface a <c>dyndns-<Interface></c> group
+    /// with a matching dns-proxy route, then the removal of the groups that are no longer wanted.
+    /// </summary>
+    private async Task SyncProfileAsync(RouterProfile profile)
     {
         try
         {
-            group ??= _configService.LoadDnsList();
+            var routes = _settings.GetRoutes(profile.Id);
 
-            Notify(SyncStatus.Running, $"Синхронизация: {group.Domains.Count} доменов");
+            if (routes.Count > 0 && string.IsNullOrWhiteSpace(profile.VpnInterface))
+            {
+                // Without an interface every domain would be dropped and the router's groups wiped.
+                Notify(SyncStatus.Error, $"{profile.DisplayName}: не выбран VPN-интерфейс, синхронизация пропущена");
+                return;
+            }
 
-            var config = _configService.LoadConfig();
-            await _apiService.SyncGroupAsync(group, config.VpnInterface);
+            var groups = DnsRouting.GroupByInterface(routes, profile.VpnInterface);
+            var api = _apiPool.Get(profile);
 
-            group.IsSynced = true;
-            Notify(SyncStatus.Success, $"Синхронизировано: {group.Domains.Count} доменов");
+            Notify(SyncStatus.Running, $"{profile.DisplayName}: синхронизация, {routes.Count} доменов");
+
+            foreach (var (Interface, GroupName, Domains) in groups)
+            {
+                var dnsGroup = new DnsGroup
+                {
+                    Name = GroupName,
+                    Description = $"DyndDns: {Interface}",
+                    Domains = Domains
+                };
+
+                await api.SyncGroupAsync(dnsGroup, Interface);
+            }
+
+            await api.RemoveStaleRoutingGroupsAsync([.. groups.Select(group => group.GroupName)]);
+
+            Notify(SyncStatus.Success, $"{profile.DisplayName}: синхронизировано, {routes.Count} доменов");
         }
         catch (Exception ex)
         {
-            Trace.TraceError($"Sync failed: {ex}");
-            Notify(SyncStatus.Error, $"Ошибка: {ex.Message}");
+            Trace.TraceError($"Sync of '{profile.DisplayName}' failed: {ex}");
+            Notify(SyncStatus.Error, $"{profile.DisplayName}: {ex.Message}");
         }
-    }
-
-    private void OnDnsListChanged(object sender, FileSystemEventArgs e)
-    {
-        var lastSelfWrite = Interlocked.Read(ref _lastSelfWriteTicks);
-        if (lastSelfWrite != 0 && DateTime.UtcNow.Ticks - lastSelfWrite < SelfWriteGracePeriod.Ticks)
-            return;
-
-        CancellationToken token;
-        lock (_watcherLock)
+        finally
         {
-            _debounceCts?.Cancel();
-            _debounceCts = new CancellationTokenSource();
-            token = _debounceCts.Token;
+            SyncCompleted?.Invoke(profile.Id);
         }
-
-        _ = Task.Delay(400, token).ContinueWith(
-            task =>
-            {
-                if (!task.IsCanceled)
-                    RequestSync();
-            },
-            TaskScheduler.Default);
     }
 
     private void Notify(SyncStatus status, string message)
@@ -171,13 +204,17 @@ public sealed class SyncService : IDisposable
     {
         _shutdown.Cancel();
 
-        _watcher?.Dispose();
-        _watcher = null;
-
-        lock (_watcherLock)
-        {
-            _debounceCts?.Cancel();
-            _debounceCts = null;
-        }
+        // The worker may still be parked on the semaphore, so the handles are released only after it has
+        // left its loop; destroying them under it would end up as an ObjectDisposedException in a task
+        // nobody observes.
+        _ = _worker.ContinueWith(
+            _ =>
+            {
+                _wake.Dispose();
+                _shutdown.Dispose();
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 }

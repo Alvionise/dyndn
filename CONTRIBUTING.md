@@ -33,12 +33,16 @@ dotnet run --project .\src\DyndDns.TrayApp\DyndDns.TrayApp.csproj
 
 ## Guidelines
 
-- Follow the existing code style and project conventions; `.editorconfig` defines the defaults.
+- Follow the existing code style and project conventions; `.editorconfig` is the source of truth and the
+  CI runs `dotnet format --verify-no-changes`. Apply the fixes locally with `dotnet format .\dyndn.slnx`.
+- The style the project settled on: file-scoped namespaces with `System.*` usings first, collection
+  expressions (`[]`, `["a", "b"]`) instead of `new[] { }` / `new List<T> { }`, explicit constructors
+  instead of primary constructors, and `var` only when the type is obvious from the right-hand side.
 - Keep changes focused and avoid unrelated refactors in the same pull request.
 - Add or update tests for any behavior change in the pure logic (normalization, RCI payloads,
   password protection).
-- Do not commit local configuration (`src/DyndDns.TrayApp/config/dyndns.json`,
-  `src/DyndDns.TrayApp/config/dns-list.json`) or anything under `bin/`, `obj/`, `dist/`.
+- Do not commit local data (`src/DyndDns.TrayApp/config/dyndns.db` and the logs) or anything under
+  `bin/`, `obj/`, `dist/`.
 - Update `CHANGELOG.md` under `Unreleased` for user-visible changes.
 
 ## Pull requests

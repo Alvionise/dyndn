@@ -6,28 +6,36 @@ namespace DyndDns.TrayApp.Services;
 /// </summary>
 internal static class DomainNormalizer
 {
+    private const string WwwPrefix = "www.";
+
+    /// <summary>Where the host ends: a path, a query, a fragment or a port.</summary>
+    private static readonly char[] HostSeparators = ['/', '?', '#', ':'];
+
     public static string Normalize(string input)
     {
-        var value = input.Trim();
+        var value = CutAfterScheme(input.Trim());
+        var end = value.Length;
 
-        if (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            value = value[8..];
-        else if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
-            value = value[7..];
-
-        if (value.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
-            value = value[4..];
-
-        var slash = value.IndexOf('/');
-        var query = value.IndexOf('?');
-        var end = (slash, query) switch
+        foreach (var separator in HostSeparators)
         {
-            (> 0, > 0) => Math.Min(slash, query),
-            (> 0, _) => slash,
-            (_, > 0) => query,
-            _ => value.Length
-        };
+            var index = value.IndexOf(separator);
 
-        return value[..end];
+            if (index > 0 && index < end)
+                end = index;
+        }
+
+        value = value[..end];
+
+        // "www." belongs to a longer name and goes away with it; a name that is left with a single label after it
+        // ("www.com") is a domain of its own, and dropping the prefix would turn it into "com".
+        return value.StartsWith(WwwPrefix, StringComparison.OrdinalIgnoreCase) &&
+            value[WwwPrefix.Length..].Contains('.')
+                ? value[WwwPrefix.Length..]
+                : value;
     }
+
+    private static string CutAfterScheme(string value) =>
+        value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? value[8..]
+        : value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? value[7..]
+        : value;
 }
