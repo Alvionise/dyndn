@@ -84,7 +84,7 @@ public class DialogLayoutTests
     {
         using var dialog = new SettingsDialog(new AppConfig(), @"c:\data\dyndns.db");
 
-        AssertNothingEscapesItsParent(dialog);
+        TestLayout.AssertNothingEscapesItsParent(dialog);
     }
 
     /// <summary>
@@ -118,25 +118,6 @@ public class DialogLayoutTests
         Assert.Equal(200, window.ClientSize.Width);
         Assert.Equal(150, window.ClientSize.Height);
         Assert.Equal(window.Size, window.MinimumSize);
-    }
-
-    /// <summary>
-    /// An auto-sized container measures a row before the width of the column is known, so a label that turns out
-    /// wider than the column wraps into a second line the container was never sized for. Walking the tree catches
-    /// that: the explanation under the journal limit sat on the bottom border of its group box exactly this way.
-    /// </summary>
-    private static void AssertNothingEscapesItsParent(Control parent)
-    {
-        var area = new Rectangle(Point.Empty, parent.ClientSize);
-
-        foreach (Control child in parent.Controls)
-        {
-            Assert.True(
-                area.Contains(child.Bounds),
-                $"{child.GetType().Name} \"{child.Text}\" {child.Bounds} does not fit into {parent.GetType().Name} {area}");
-
-            AssertNothingEscapesItsParent(child);
-        }
     }
 
     private static void AssertResizableAndFilled(Form dialog)

@@ -20,33 +20,23 @@ internal static class DialogLayout
     /// <summary>
     /// Gives a window the size its layout needs and locks that size as its minimum, so nothing is ever clipped:
     /// the window never shrinks below the size it was designed for and grows when a row asks for more room.
-    /// The layout is measured once more after the size was applied, because a row that fills the remaining width
-    /// — the table of the monitoring window — asks for its room only once the window is that wide, and a
-    /// measurement taken on the narrow window every form starts as would leave that control out of sight.
+    /// The layout is measured at the designed size and not on the window as it is found: a row that fills the
+    /// remaining width asks for its room only once the window is that wide, so a measurement taken on the narrow
+    /// window every form starts as would leave that control out of sight. The measurement is taken once, because
+    /// such a row reports the width it was given, i.e. it grows together with the window and repeating the
+    /// measurement would only make the window wider without ever settling.
     /// </summary>
     public static void ApplyMinimumSize(Form window, Control root, Size designed)
     {
-        var size = designed;
+        window.ClientSize = designed;
+        window.PerformLayout();
 
-        for (var pass = 0; pass < 3; pass++)
-        {
-            window.ClientSize = size;
-            window.PerformLayout();
+        // PreferredSize already covers the margins and the padding of the root, so it is used as it is.
+        var needed = root.PreferredSize;
 
-            // PreferredSize already covers the margins and the padding of the root, so it is used as it is.
-            var needed = root.PreferredSize;
-
-            var next = new Size(
-                Math.Max(designed.Width, needed.Width),
-                Math.Max(designed.Height, needed.Height));
-
-            // The measurement is taken at the size that was just applied, so it fits as soon as the content no
-            // longer asks for more room than the window has — which is what the loop waits for.
-            if (next.Width <= size.Width && next.Height <= size.Height)
-                break;
-
-            size = next;
-        }
+        var size = new Size(
+            Math.Max(designed.Width, needed.Width),
+            Math.Max(designed.Height, needed.Height));
 
         window.ClientSize = size;
 
