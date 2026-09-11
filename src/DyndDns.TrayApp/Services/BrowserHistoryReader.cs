@@ -118,10 +118,19 @@ internal sealed class BrowserHistoryReader
     /// History files count microseconds from their own epoch. Ticks keep the conversion exact, so no
     /// floating point is involved; a missing value means the visit time is unknown.
     /// </summary>
-    private static DateTime ToTimestamp(long microseconds, DateTime epoch) =>
-        microseconds <= 0
-            ? DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc)
-            : epoch.AddTicks(microseconds * 10);
+    private static DateTime ToTimestamp(long microseconds, DateTime epoch)
+    {
+        if (microseconds <= 0)
+            return DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
+
+        // A history file can carry an absurd value, and the conversion is clamped instead of letting the addition
+        // throw: one bad row would otherwise lose the whole history of that browser.
+        var ticks = microseconds > (DateTime.MaxValue.Ticks - epoch.Ticks) / 10
+            ? DateTime.MaxValue.Ticks
+            : epoch.Ticks + microseconds * 10;
+
+        return new DateTime(ticks, DateTimeKind.Utc);
+    }
 
     /// <summary>Maps a history URL to the bare domain, skipping local pages and other schemes.</summary>
     private static string? ToDomain(string url)

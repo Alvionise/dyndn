@@ -5,9 +5,9 @@ using DyndDns.TrayApp.Models;
 namespace DyndDns.TrayApp.Services;
 
 /// <summary>
-/// Wires the DNS sources to the SQLite store: ETW hits are aggregated in memory and flushed in
-/// batches, while the browser history is imported whenever a browser wrote to it. Both land in the
-/// same table, so the search window sees service lookups and visited sites alike.
+/// Wires the DNS sources to the shared database: ETW hits are aggregated in memory and flushed in
+/// batches, while the browser history is imported whenever a browser wrote to it. Both land in the same
+/// table, so the search window sees service lookups and visited sites alike.
 /// </summary>
 internal sealed class DnsMonitorService : IDisposable
 {
@@ -15,49 +15,38 @@ internal sealed class DnsMonitorService : IDisposable
     private static readonly TimeSpan HistoryInterval = TimeSpan.FromSeconds(30);
 
     private readonly DnsDatabase _database;
+    private readonly AppConfig _config;
     private readonly DnsMonitor _monitor = new();
     private readonly BrowserHistoryReader _historyReader = new();
-    private readonly bool _browserHistoryEnabled;
     private readonly Dictionary<string, DateTime> _historyStamps = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _historyLock = new();
+    private readonly Lock _historyLock = new();
 
     private System.Threading.Timer? _flushTimer;
     private System.Threading.Timer? _historyTimer;
 
-    public DnsMonitorService(string databasePath, bool browserHistoryEnabled = true)
+    public DnsMonitorService(AppDatabase database, AppConfig config)
     {
-        _database = new DnsDatabase(databasePath);
-        _browserHistoryEnabled = browserHistoryEnabled;
+        _database = new DnsDatabase(database);
+        _config = config;
     }
 
     public bool IsRunning => _monitor.IsRunning;
 
-    /// <summary>Returns <c>false</c> when the database or the ETW session is unavailable.</summary>
+    /// <summary>
+    /// Returns <c>false</c> when the ETW session is unavailable. Nothing is started in that case: the menu
+    /// reports the monitor as off, so it may not keep collecting in the background either.
+    /// </summary>
     public bool Start()
     {
-        try
-        {
-            _database.Initialize();
-        }
-        catch (Exception ex)
-        {
-            Trace.TraceError($"DNS database unavailable: {ex.Message}");
-            return false;
-        }
-
-        StartBrowserHistoryImport();
-
         if (!_monitor.Start())
             return false;
 
+        StartBrowserHistoryImport();
         _flushTimer ??= new System.Threading.Timer(_ => Flush(), null, FlushInterval, FlushInterval);
         return true;
     }
 
-    /// <summary>
-    /// Stops collecting. The database is created lazily as well, so searching works even when the
-    /// monitor was never started.
-    /// </summary>
+    /// <summary>Stops collecting; searching keeps working because it reads the database directly.</summary>
     public void Stop()
     {
         _flushTimer?.Dispose();
@@ -70,10 +59,18 @@ internal sealed class DnsMonitorService : IDisposable
         _monitor.Stop();
     }
 
-    public IReadOnlyList<DomainStat> Search(string? term, int limit)
+    public IReadOnlyList<DomainStat> Search(string? term, int limit) => _database.Search(term, limit);
+
+    /// <summary>
+    /// Removes the journal entries that no binding mentions; returns how many were dropped. The counters
+    /// collected so far are written first, otherwise the batch still in memory would put the deleted domains
+    /// back on the next flush and the list would fill up again a few seconds later.
+    /// </summary>
+    public int ClearUnboundDomains()
     {
-        _database.Initialize();
-        return _database.Search(term, limit);
+        Flush();
+
+        return _database.DeleteUnbound();
     }
 
     /// <summary>
@@ -82,7 +79,7 @@ internal sealed class DnsMonitorService : IDisposable
     /// </summary>
     private void StartBrowserHistoryImport()
     {
-        if (!_browserHistoryEnabled)
+        if (!_config.Monitor.BrowserHistoryEnabled)
             return;
 
         ImportBrowserHistory();
@@ -105,8 +102,8 @@ internal sealed class DnsMonitorService : IDisposable
                 if (visits.Count == 0)
                     return;
 
-                _database.Initialize();
                 _database.AddVisits(visits);
+                TrimJournal();
             }
             catch (Exception ex)
             {
@@ -145,12 +142,37 @@ internal sealed class DnsMonitorService : IDisposable
             if (hits.Count == 0)
                 return;
 
-            _database.Initialize();
             _database.AddHits(hits);
+            TrimJournal();
         }
         catch (Exception ex)
         {
             Trace.TraceError($"DNS flush failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Applies the configured journal limit. Only domains that no binding mentions are dropped, so a domain
+    /// routed somewhere never leaves the list however old its last lookup is; bound entries do not count
+    /// towards the limit either.
+    /// </summary>
+    private void TrimJournal()
+    {
+        var monitor = _config.Monitor;
+
+        if (!monitor.JournalAutoCleanup || monitor.JournalMaxRows <= 0)
+            return;
+
+        try
+        {
+            var removed = _database.TrimUnbound(monitor.JournalMaxRows);
+
+            if (removed > 0)
+                Trace.TraceInformation($"Journal cleanup removed {removed} unused domains.");
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"Journal cleanup failed: {ex.Message}");
         }
     }
 

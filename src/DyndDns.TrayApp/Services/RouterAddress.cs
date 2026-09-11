@@ -20,6 +20,7 @@ internal static class RouterAddress
         return value.Contains("://", StringComparison.Ordinal) ? value : $"{DefaultScheme}://{value}";
     }
 
+    /// <summary>Host of an address, without its scheme, port or path.</summary>
     public static string GetHost(string address)
     {
         var value = Normalize(address);
@@ -38,5 +39,17 @@ internal static class RouterAddress
             host = host[..colonIndex];
 
         return host;
+    }
+
+    /// <summary>
+    /// True when both addresses lead to the same device: neither a scheme, nor a port, nor a path, nor the
+    /// casing makes another router. Two profiles for one device would write the same groups on it and wipe
+    /// the domains of the other.
+    /// </summary>
+    public static bool IsSameHost(string left, string right)
+    {
+        var leftHost = GetHost(left);
+
+        return leftHost.Length > 0 && string.Equals(leftHost, GetHost(right), StringComparison.OrdinalIgnoreCase);
     }
 }

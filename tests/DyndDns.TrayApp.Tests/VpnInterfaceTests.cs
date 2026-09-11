@@ -13,28 +13,37 @@ public class VpnInterfaceTests
         using var document = JsonDocument.Parse(
             """
             {
-              "L2TP0": { "type": "L2TP", "description": "vpn", "connected": "yes", "state": "up" },
+              "L2TP0": { "type": "L2TP", "description": "Латвия", "connected": "yes", "state": "up" },
               "Home": { "type": "Bridge", "connected": "no", "state": "up" }
             }
             """);
 
-        var interfaces = KeeneticApiService.ParseInterfaces(document.RootElement);
+        var interfaces = KeeneticRci.ParseInterfaces(document.RootElement);
 
         var vpn = Assert.Single(interfaces, item => item.Name == "L2TP0");
         Assert.Equal("L2TP", vpn.Type);
-        Assert.Equal("vpn", vpn.Description);
+        Assert.Equal("Латвия", vpn.Description);
         Assert.True(vpn.IsUp);
 
         var bridge = Assert.Single(interfaces, item => item.Name == "Home");
         Assert.False(bridge.IsUp);
     }
 
+    [Theory]
+    [InlineData("SSTP0", "Латвия", "Латвия (SSTP0)")]
+    [InlineData("SSTP0", "sstp0", "SSTP0")]
+    [InlineData("SSTP0", "", "SSTP0")]
+    [InlineData("SSTP0", null, "SSTP0")]
+    [InlineData(" SSTP0 ", " Латвия ", "Латвия (SSTP0)")]
+    public void VpnLabel_PutsTheNameOfTheConnectionBeforeItsInterface(string name, string? description, string expected) =>
+        Assert.Equal(expected, VpnLabel.Format(name, description));
+
     [Fact]
     public void ParseInterfaces_FallsBackToStateWhenConnectedIsAbsent()
     {
         using var document = JsonDocument.Parse("""{ "GigabitEthernet0": { "type": "GigabitEthernet", "state": "up" } }""");
 
-        var parsed = Assert.Single(KeeneticApiService.ParseInterfaces(document.RootElement));
+        var parsed = Assert.Single(KeeneticRci.ParseInterfaces(document.RootElement));
 
         Assert.True(parsed.IsUp);
     }
@@ -49,42 +58,39 @@ public class VpnInterfaceTests
     [InlineData("GigabitEthernet0", "GigabitEthernet", false)]
     [InlineData("Home", "Bridge", false)]
     public void IsVpnInterface_RecognizesVpnTypes(string name, string type, bool expected) =>
-        Assert.Equal(expected, KeeneticApiService.IsVpnInterface(name, type));
+        Assert.Equal(expected, KeeneticRci.IsVpnInterface(name, type));
 
     [Fact]
-    public void PickActive_PrefersConnectedInterface()
+    public void PickPreferred_PrefersConnectedInterfaceWhenNothingIsConfigured()
     {
         var interfaces = new List<VpnInterfaceInfo>
         {
-            new("L2TP0", "L2TP", "down tunnel", false, string.Empty),
-            new("SSTP0", "SSTP", "live tunnel", true, string.Empty)
+            new("L2TP0", "L2TP", string.Empty, false),
+            new("SSTP0", "SSTP", "Латвия", true)
         };
 
-        Assert.Equal("SSTP0", VpnInterfaceResolver.PickActive(interfaces)?.Name);
+        Assert.Equal("SSTP0", VpnInterfaceResolver.PickPreferred(interfaces, null)?.Name);
     }
 
     [Fact]
-    public void PickActive_FallsBackToFirstInterface()
+    public void PickPreferred_FallsBackToFirstInterfaceWhenNoneIsConnected()
     {
-        var interfaces = new List<VpnInterfaceInfo>
-        {
-            new("L2TP0", "L2TP", string.Empty, false, string.Empty)
-        };
+        var interfaces = new List<VpnInterfaceInfo> { new("L2TP0", "L2TP", string.Empty, false) };
 
-        Assert.Equal("L2TP0", VpnInterfaceResolver.PickActive(interfaces)?.Name);
+        Assert.Equal("L2TP0", VpnInterfaceResolver.PickPreferred(interfaces, null)?.Name);
     }
 
     [Fact]
-    public void PickActive_ReturnsNullWhenThereAreNoInterfaces() =>
-        Assert.Null(VpnInterfaceResolver.PickActive(new List<VpnInterfaceInfo>()));
+    public void PickPreferred_ReturnsNullWhenNothingIsConfiguredAndThereAreNoInterfaces() =>
+        Assert.Null(VpnInterfaceResolver.PickPreferred([], null));
 
     [Fact]
     public void PickPreferred_KeepsConfiguredInterfaceWhileItExists()
     {
         var interfaces = new List<VpnInterfaceInfo>
         {
-            new("L2TP0", "L2TP", string.Empty, true, string.Empty),
-            new("SSTP0", "SSTP", string.Empty, false, string.Empty)
+            new("L2TP0", "L2TP", string.Empty, true),
+            new("SSTP0", "SSTP", string.Empty, false)
         };
 
         Assert.Equal("SSTP0", VpnInterfaceResolver.PickPreferred(interfaces, "SSTP0")?.Name);
@@ -95,8 +101,8 @@ public class VpnInterfaceTests
     {
         var interfaces = new List<VpnInterfaceInfo>
         {
-            new("L2TP0", "L2TP", string.Empty, false, string.Empty),
-            new("SSTP0", "SSTP", string.Empty, true, string.Empty)
+            new("L2TP0", "L2TP", string.Empty, false),
+            new("SSTP0", "SSTP", string.Empty, true)
         };
 
         Assert.Equal("SSTP0", VpnInterfaceResolver.PickPreferred(interfaces, "OpenVPN0")?.Name);
@@ -105,15 +111,12 @@ public class VpnInterfaceTests
     [Fact]
     public void PickPreferred_ReturnsFirstWhenNothingIsConfiguredOrConnected()
     {
-        var interfaces = new List<VpnInterfaceInfo>
-        {
-            new("L2TP0", "L2TP", string.Empty, false, string.Empty)
-        };
+        var interfaces = new List<VpnInterfaceInfo> { new("L2TP0", "L2TP", string.Empty, false) };
 
         Assert.Equal("L2TP0", VpnInterfaceResolver.PickPreferred(interfaces, null)?.Name);
     }
 
     [Fact]
     public void PickPreferred_ReturnsNullWhenThereAreNoInterfaces() =>
-        Assert.Null(VpnInterfaceResolver.PickPreferred(new List<VpnInterfaceInfo>(), "L2TP0"));
+        Assert.Null(VpnInterfaceResolver.PickPreferred([], "L2TP0"));
 }

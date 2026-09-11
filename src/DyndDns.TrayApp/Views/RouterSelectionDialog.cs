@@ -1,11 +1,9 @@
-using System.Drawing;
-using System.Windows.Forms;
 using DyndDns.TrayApp.Models;
 
 namespace DyndDns.TrayApp.Views;
 
 /// <summary>
-/// Shown when more than one Keenetic answers the scan. The user either picks a device from the
+/// The scan result, always shown when a router is configured: the user either picks a device from the
 /// list or types an address manually.
 /// </summary>
 internal sealed class RouterSelectionDialog : SetupDialogBase
@@ -14,15 +12,16 @@ internal sealed class RouterSelectionDialog : SetupDialogBase
     private readonly TextBox _manualAddress;
 
     public RouterSelectionDialog(IReadOnlyList<DiscoveredRouter> routers)
-        : base("DyndDns — Выбор роутера", new Size(420, 265))
+        : base("Выбор роутера", new Size(480, 340))
     {
-        Controls.Add(CreateLabel("Найдено несколько роутеров. Выберите нужный:", new Point(15, 15)));
+        AddContent(CreateLabel(routers.Count > 0
+            ? "Найдены роутеры:"
+            : "Роутеры не найдены — введите адрес вручную:"));
 
         _routerList = new ListBox
         {
-            Location = new Point(15, 40),
-            Size = new Size(390, 120),
-            IntegralHeight = false
+            IntegralHeight = false,
+            DisplayMember = nameof(DiscoveredRouter.DisplayName)
         };
 
         foreach (var router in routers)
@@ -31,28 +30,31 @@ internal sealed class RouterSelectionDialog : SetupDialogBase
         if (_routerList.Items.Count > 0)
             _routerList.SelectedIndex = 0;
 
-        Controls.Add(_routerList);
-        Controls.Add(CreateLabel("Или введите адрес вручную:", new Point(15, 168)));
+        // The list owns the free space of the dialog.
+        AddContent(_routerList, fillHeight: true);
 
-        _manualAddress = new TextBox
-        {
-            Location = new Point(15, 190),
-            Width = 390
-        };
-        Controls.Add(_manualAddress);
+        AddContent(CreateLabel("Или введите адрес вручную:"));
 
-        var okButton = CreateButton("Выбрать", new Point(200, 225));
+        _manualAddress = new TextBox();
+        AddContent(_manualAddress);
+
+        var okButton = CreateButton("Выбрать (Enter)", 130);
         okButton.DialogResult = DialogResult.OK;
 
-        var cancelButton = CreateButton("Отмена", new Point(305, 225));
+        var cancelButton = CreateButton("Отмена (Esc)", 115);
         cancelButton.DialogResult = DialogResult.Cancel;
 
-        Controls.AddRange(new Control[] { okButton, cancelButton });
+        ButtonBar.Controls.AddRange([okButton, cancelButton]);
         AcceptButton = okButton;
         CancelButton = cancelButton;
 
         FormClosing += OnFormClosing;
+
+        ApplyContentMinimumSize();
     }
+
+    /// <summary>Router picked from the scan; <c>null</c> when the address was typed manually.</summary>
+    public DiscoveredRouter? SelectedRouter { get; private set; }
 
     public string Address { get; private set; } = string.Empty;
 
@@ -62,19 +64,22 @@ internal sealed class RouterSelectionDialog : SetupDialogBase
             return;
 
         var manual = _manualAddress.Text.Trim();
+
         if (manual.Length > 0)
         {
             Address = manual;
+            SelectedRouter = null;
             return;
         }
 
         if (_routerList.SelectedItem is DiscoveredRouter selected)
         {
             Address = selected.Address;
+            SelectedRouter = selected;
             return;
         }
 
         e.Cancel = true;
-        MessageBox.Show(this, "Выберите роутер из списка или введите адрес.", "DyndDns", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        Dialogs.Tell(this, "Выберите роутер из списка или введите адрес.");
     }
 }

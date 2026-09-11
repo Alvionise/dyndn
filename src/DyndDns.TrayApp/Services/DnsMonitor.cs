@@ -18,11 +18,10 @@ internal sealed class DnsMonitor : IDisposable
     /// <summary>All keywords: without them the provider stays silent.</summary>
     private const ulong AnyKeyword = 0xFFFFFFFFFFFFFFFF;
 
-    private static readonly string[] QueryNameFields = { "QueryName", "Name", "Query", "HostName" };
+    private static readonly string[] QueryNameFields = ["QueryName", "Name", "Query", "HostName"];
 
     private ConcurrentDictionary<string, int> _hits = new(StringComparer.OrdinalIgnoreCase);
     private TraceEventSession? _session;
-    private Thread? _worker;
 
     public bool IsRunning => _session is not null;
 
@@ -31,19 +30,23 @@ internal sealed class DnsMonitor : IDisposable
         if (_session is not null)
             return true;
 
+        TraceEventSession? session = null;
+
         try
         {
-            var session = new TraceEventSession(SessionName) { StopOnDispose = true };
+            session = new TraceEventSession(SessionName) { StopOnDispose = true };
             session.EnableProvider(ProviderName, TraceEventLevel.Verbose, AnyKeyword);
             session.Source.Dynamic.All += OnEvent;
 
             _session = session;
-            _worker = new Thread(() => session.Source.Process())
+
+            // The thread runs for as long as the session lives; the reference is not kept, because stopping is
+            // the session's own business.
+            new Thread(() => Process(session))
             {
                 IsBackground = true,
                 Name = "DyndDns.DnsMonitor"
-            };
-            _worker.Start();
+            }.Start();
 
             return true;
         }
@@ -51,7 +54,9 @@ internal sealed class DnsMonitor : IDisposable
         {
             Trace.TraceError($"DNS monitor failed to start: {ex.Message}");
 
-            _session?.Dispose();
+            // The session is a real-time one on the machine, so it is torn down here: dropping it before
+            // it was assigned to the field would leave it to the finalizer.
+            session?.Dispose();
             _session = null;
             return false;
         }
@@ -66,7 +71,9 @@ internal sealed class DnsMonitor : IDisposable
         if (name is null)
             return;
 
-        var domain = DomainNormalizer.Normalize(name.TrimEnd('.'));
+        // DNS names are case-insensitive, so the journal keeps one form of them: the event carries the name
+        // as the caller wrote it, and the same lookup in another casing would become a second row.
+        var domain = DomainNormalizer.Normalize(name.TrimEnd('.')).ToLowerInvariant();
         if (domain.Length == 0)
             return;
 
@@ -113,7 +120,22 @@ internal sealed class DnsMonitor : IDisposable
 
         _session?.Dispose();
         _session = null;
-        _worker = null;
+    }
+
+    /// <summary>
+    /// Runs the session on its own thread until it is stopped. An exception escaping here would end the whole
+    /// process — the thread belongs to nobody — and the session is disposed from the outside, so it is caught.
+    /// </summary>
+    private static void Process(TraceEventSession session)
+    {
+        try
+        {
+            session.Source.Process();
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"DNS monitor processing ended: {ex.Message}");
+        }
     }
 
     public void Dispose() => Stop();

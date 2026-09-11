@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Drawing;
-using System.Windows.Forms;
 using DyndDns.TrayApp.Models;
 using DyndDns.TrayApp.Services;
 
@@ -20,7 +18,7 @@ internal sealed class ScanProgressDialog : SetupDialogBase
     private readonly Button _cancelButton;
 
     public ScanProgressDialog(RouterDiscoveryService discovery)
-        : base("DyndDns — Поиск роутера", new Size(420, 125))
+        : base("Поиск роутера", new Size(440, 160))
     {
         _discovery = discovery;
 
@@ -28,19 +26,18 @@ internal sealed class ScanProgressDialog : SetupDialogBase
         // the race between an abrupt user close and the background scan finishing.
         ControlBox = false;
 
-        _statusLabel = CreateLabel("Поиск роутера Keenetic в сети...", new Point(15, 18));
+        _statusLabel = CreateLabel("Поиск роутера Keenetic в сети...");
+        AddContent(_statusLabel);
 
         _progressBar = new ProgressBar
         {
-            Location = new Point(15, 48),
-            Width = 390,
-            Height = 18,
             Style = ProgressBarStyle.Continuous,
             Minimum = 0,
             Maximum = 100
         };
+        AddContent(_progressBar);
 
-        _cancelButton = CreateButton("Отмена", new Point(305, 78));
+        _cancelButton = CreateButton("Отмена (Esc)", 120);
         _cancelButton.Click += (_, _) =>
         {
             _cancelButton.Enabled = false;
@@ -48,12 +45,15 @@ internal sealed class ScanProgressDialog : SetupDialogBase
             _cancellation.Cancel();
         };
 
-        Controls.AddRange(new Control[] { _statusLabel, _progressBar, _cancelButton });
+        ButtonBar.Controls.Add(_cancelButton);
+        CancelButton = _cancelButton;
 
         Shown += (_, _) => _ = RunDiscoveryAsync();
+
+        ApplyContentMinimumSize();
     }
 
-    public List<DiscoveredRouter> Results { get; private set; } = new();
+    public List<DiscoveredRouter> Results { get; private set; } = [];
 
     public bool Canceled { get; private set; }
 
@@ -88,23 +88,8 @@ internal sealed class ScanProgressDialog : SetupDialogBase
         _statusLabel.Text = report.Message;
     }
 
-    private void Post(Action action)
-    {
-        try
-        {
-            if (IsDisposed)
-                return;
-
-            if (InvokeRequired)
-                BeginInvoke(action);
-            else
-                action();
-        }
-        catch (ObjectDisposedException)
-        {
-            // The dialog closed while a background report was in flight; nothing left to update.
-        }
-    }
+    /// <summary>Queues a report of the scan for this dialog's thread; see <see cref="ViewDispatch.Post"/>.</summary>
+    private void Post(Action action) => ViewDispatch.Post(this, action);
 
     private void Complete(List<DiscoveredRouter>? routers, bool canceled, string? error)
     {
@@ -114,7 +99,7 @@ internal sealed class ScanProgressDialog : SetupDialogBase
         Canceled = canceled;
 
         if (error is not null)
-            MessageBox.Show(this, $"Не удалось выполнить поиск: {error}", "DyndDns", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Dialogs.Warn(this, $"Не удалось выполнить поиск: {error}");
 
         DialogResult = Canceled ? DialogResult.Cancel : DialogResult.OK;
         Close();

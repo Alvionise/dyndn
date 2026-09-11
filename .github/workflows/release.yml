@@ -21,7 +21,7 @@ jobs:
         run: dotnet test .\tests\DyndDns.TrayApp.Tests\DyndDns.TrayApp.Tests.csproj -c Release
 
       - name: Publish
-        run: .\publish.ps1 -Output dist
+        run: .\publish.ps1 -Version ${{ github.ref_name }} -Output dist
 
       - name: Package
         run: Compress-Archive -Path .\dist\* -DestinationPath .\dyndns-${{ github.ref_name }}.zip

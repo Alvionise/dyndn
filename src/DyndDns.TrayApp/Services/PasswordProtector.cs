@@ -69,9 +69,8 @@ internal static class PasswordProtector
                 pbData = EntropyHandle.AddrOfPinnedObject()
             };
 
-            DataBlob outputBlob = default;
             var succeeded = protect
-                ? CryptProtectData(ref inputBlob, IntPtr.Zero, ref entropyBlob, IntPtr.Zero, IntPtr.Zero, CryptProtectUiForbidden, out outputBlob)
+                ? CryptProtectData(ref inputBlob, IntPtr.Zero, ref entropyBlob, IntPtr.Zero, IntPtr.Zero, CryptProtectUiForbidden, out DataBlob outputBlob)
                 : CryptUnprotectData(ref inputBlob, IntPtr.Zero, ref entropyBlob, IntPtr.Zero, IntPtr.Zero, CryptProtectUiForbidden, out outputBlob);
 
             if (!succeeded)

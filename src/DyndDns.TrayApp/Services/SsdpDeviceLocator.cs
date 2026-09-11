@@ -50,16 +50,45 @@ internal static class SsdpDeviceLocator
         return names;
     }
 
+    /// <summary>
+    /// Asks every local address for the devices on the network and collects the description URLs they point at.
+    /// One socket per address on purpose: on a machine with a VPN or a virtual adapter, a multicast sent through
+    /// an interface that has no route to the group is refused ("the host is unreachable") and the single socket the
+    /// lookup used to share would come back empty.
+    /// </summary>
     private static async Task<List<string>> CollectLocationsAsync(CancellationToken cancellationToken)
+    {
+        var searches = LocalNetwork.LocalAddresses()
+            .Select(address => SearchAsync(address, cancellationToken))
+            .ToArray();
+
+        var answers = await Task.WhenAll(searches).ConfigureAwait(false);
+
+        return [.. answers
+            .SelectMany(locations => locations)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    private static async Task<List<string>> SearchAsync(IPAddress address, CancellationToken cancellationToken)
     {
         var locations = new List<string>();
 
         using var client = new UdpClient(AddressFamily.InterNetwork);
-        client.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
+        client.Client.Bind(new IPEndPoint(address, 0));
 
         var request = BuildSearchRequest();
-        await client.SendAsync(request, request.Length, new IPEndPoint(IPAddress.Parse(MulticastAddress), MulticastPort))
-            .ConfigureAwait(false);
+
+        try
+        {
+            await client.SendAsync(request, request.Length, new IPEndPoint(IPAddress.Parse(MulticastAddress), MulticastPort))
+                .ConfigureAwait(false);
+        }
+        catch (SocketException ex)
+        {
+            // An adapter without a route to the group; the other addresses are asked all the same.
+            Trace.TraceWarning($"SSDP search from {address} was not sent: {ex.Message}");
+            return locations;
+        }
 
         using var window = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         window.CancelAfter(ResponseWindow);
@@ -71,7 +100,7 @@ internal static class SsdpDeviceLocator
                 var response = await client.ReceiveAsync(window.Token).ConfigureAwait(false);
                 var location = ExtractHeader(Encoding.UTF8.GetString(response.Buffer), "LOCATION");
 
-                if (location.Length > 0 && !locations.Contains(location, StringComparer.OrdinalIgnoreCase))
+                if (location.Length > 0)
                     locations.Add(location);
             }
             catch (OperationCanceledException)

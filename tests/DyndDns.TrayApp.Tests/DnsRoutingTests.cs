@@ -1,4 +1,5 @@
 using DyndDns.TrayApp.Models;
+using DyndDns.TrayApp.Services;
 using Xunit;
 
 namespace DyndDns.TrayApp.Tests;
@@ -8,40 +9,43 @@ public class DnsRoutingTests
     [Fact]
     public void GroupByInterface_SplitsRoutesPerInterface()
     {
-        var routes = new[]
-        {
+        DnsRoute[] routes =
+        [
             new DnsRoute("a.com", "L2TP0"),
             new DnsRoute("b.com", "L2TP0"),
             new DnsRoute("c.com", "SSTP0")
-        };
+        ];
 
         var groups = DnsRouting.GroupByInterface(routes, "L2TP0");
 
         Assert.Equal(2, groups.Count);
 
-        var l2tp = Assert.Single(groups, group => group.Interface == "L2TP0");
-        Assert.Equal("dyndns-L2TP0", l2tp.GroupName);
-        Assert.Equal(new[] { "a.com", "b.com" }, l2tp.Domains);
+        var (_, groupName, domains) = Assert.Single(groups, group => group.Interface == "L2TP0");
 
-        var sstp = Assert.Single(groups, group => group.Interface == "SSTP0");
-        Assert.Equal("dyndns-SSTP0", sstp.GroupName);
-        Assert.Equal(new[] { "c.com" }, sstp.Domains);
+        Assert.Equal("dyndns-L2TP0", groupName);
+        Assert.Equal(["a.com", "b.com"], domains);
+
+        var (_, sstpGroupName, sstpDomains) = Assert.Single(groups, group => group.Interface == "SSTP0");
+
+        Assert.Equal("dyndns-SSTP0", sstpGroupName);
+        Assert.Equal(["c.com"], sstpDomains);
     }
 
     [Fact]
     public void GroupByInterface_FallsBackToDefaultInterface()
     {
-        var groups = DnsRouting.GroupByInterface(new[] { new DnsRoute("a.com", string.Empty) }, "L2TP0");
+        var groups = DnsRouting.GroupByInterface([new DnsRoute("a.com", string.Empty)], "L2TP0");
 
-        var group = Assert.Single(groups);
-        Assert.Equal("L2TP0", group.Interface);
-        Assert.Equal("dyndns-L2TP0", group.GroupName);
+        var (interfaceName, groupName, _) = Assert.Single(groups);
+
+        Assert.Equal("L2TP0", interfaceName);
+        Assert.Equal("dyndns-L2TP0", groupName);
     }
 
     [Fact]
     public void GroupByInterface_DropsRoutesWithoutAnyInterface()
     {
-        var groups = DnsRouting.GroupByInterface(new[] { new DnsRoute("a.com", string.Empty) }, string.Empty);
+        var groups = DnsRouting.GroupByInterface([new DnsRoute("a.com", string.Empty)], string.Empty);
 
         Assert.Empty(groups);
     }
@@ -49,15 +53,15 @@ public class DnsRoutingTests
     [Fact]
     public void GroupByInterface_RemovesDuplicateDomains()
     {
-        var routes = new[]
-        {
+        DnsRoute[] routes =
+        [
             new DnsRoute("a.com", "L2TP0"),
             new DnsRoute("A.COM", "L2TP0")
-        };
+        ];
 
-        var group = Assert.Single(DnsRouting.GroupByInterface(routes, "L2TP0"));
+        var (_, _, domains) = Assert.Single(DnsRouting.GroupByInterface(routes, "L2TP0"));
 
-        Assert.Single(group.Domains);
+        Assert.Single(domains);
     }
 
     [Theory]
@@ -75,11 +79,11 @@ public class DnsRoutingTests
     [Fact]
     public void FromRouterGroups_KeepsOnlyManagedGroups()
     {
-        var groups = new[]
-        {
-            new RouterRouteGroup("dyndns-L2TP0", "L2TP0", new[] { "a.com" }),
-            new RouterRouteGroup("default", "SSTP0", new[] { "legacy.com" })
-        };
+        RouterRouteGroup[] groups =
+        [
+            new RouterRouteGroup("dyndns-L2TP0", "L2TP0", ["a.com"]),
+            new RouterRouteGroup("default", "SSTP0", ["legacy.com"])
+        ];
 
         var routes = DnsRouting.FromRouterGroups(groups);
 
@@ -89,8 +93,8 @@ public class DnsRoutingTests
     [Fact]
     public void MergeRouterRoutes_AdoptsTheInterfaceTheRouterReports()
     {
-        var local = new[] { new DnsRoute("a.com", "SSTP0") };
-        var router = new[] { new DnsRoute("a.com", "L2TP0") };
+        DnsRoute[] local = [new DnsRoute("a.com", "SSTP0")];
+        DnsRoute[] router = [new DnsRoute("a.com", "L2TP0")];
 
         var merged = DnsRouting.MergeRouterRoutes(local, router);
 
@@ -100,8 +104,8 @@ public class DnsRoutingTests
     [Fact]
     public void MergeRouterRoutes_AddsDomainsThatOnlyTheRouterKnows()
     {
-        var local = new[] { new DnsRoute("a.com", "L2TP0") };
-        var router = new[] { new DnsRoute("b.com", "L2TP0") };
+        DnsRoute[] local = [new DnsRoute("a.com", "L2TP0")];
+        DnsRoute[] router = [new DnsRoute("b.com", "L2TP0")];
 
         var merged = DnsRouting.MergeRouterRoutes(local, router);
 
@@ -112,9 +116,9 @@ public class DnsRoutingTests
     [Fact]
     public void MergeRouterRoutes_KeepsLocalEntriesThatAreNotSyncedYet()
     {
-        var local = new[] { new DnsRoute("pending.com", "L2TP0") };
+        DnsRoute[] local = [new DnsRoute("pending.com", "L2TP0")];
 
-        var merged = DnsRouting.MergeRouterRoutes(local, Array.Empty<DnsRoute>());
+        var merged = DnsRouting.MergeRouterRoutes(local, []);
 
         Assert.Equal(local, merged);
     }
@@ -122,8 +126,8 @@ public class DnsRoutingTests
     [Fact]
     public void MergeRouterRoutes_ReturnsTheSameSetWhenEverythingMatches()
     {
-        var local = new[] { new DnsRoute("a.com", "L2TP0") };
-        var router = new[] { new DnsRoute("A.COM", "l2tp0") };
+        DnsRoute[] local = [new DnsRoute("a.com", "L2TP0")];
+        DnsRoute[] router = [new DnsRoute("A.COM", "l2tp0")];
 
         var merged = DnsRouting.MergeRouterRoutes(local, router);
 

@@ -1,13 +1,11 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using DyndDns.TrayApp.Models;
 
 namespace DyndDns.TrayApp.Services;
 
-public readonly record struct DiscoveryProgress(int Scanned, int Total, int Found, string Message);
+internal readonly record struct DiscoveryProgress(int Scanned, int Total, int Found, string Message);
 
 internal readonly record struct Ipv4Subnet(IPAddress Address, IPAddress Mask);
 
@@ -16,22 +14,14 @@ internal readonly record struct Ipv4Subnet(IPAddress Address, IPAddress Mask);
 /// sweeps the /24 around every local address and default gateway over HTTP and HTTPS. A host is
 /// recognized as Keenetic when <c>GET /auth</c> answers 401 with the NDM challenge headers.
 /// </summary>
-public sealed class RouterDiscoveryService
+internal sealed class RouterDiscoveryService
 {
     private static readonly string[] CommonHosts =
-    {
+    [
         "192.168.1.1", "192.168.0.1", "192.168.10.1", "10.0.0.1", "my.keenetic.net"
-    };
+    ];
 
-    private static readonly string[] Schemes = { "http", "https" };
-
-    // Virtual adapters (Hyper-V, WSL, VPN tunnels) add large dead address ranges that only slow
-    // the sweep down; the gateways of every adapter are still probed through the fast path.
-    private static readonly string[] VirtualAdapterMarkers =
-    {
-        "hyper-v", "vmware", "virtualbox", "wsl", "loopback", "pseudo",
-        "tap-windows", "wireguard", "openvpn", "tailscale", "zerotier"
-    };
+    private static readonly string[] Schemes = ["http", "https"];
 
     private static readonly IPAddress ClassCMask = IPAddress.Parse("255.255.255.0");
 
@@ -51,8 +41,9 @@ public sealed class RouterDiscoveryService
         IProgress<DiscoveryProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var gateways = GetDefaultGateways();
-        var subnets = GetLocalSubnets()
+        var gateways = LocalNetwork.DefaultGateways();
+        var subnets = LocalNetwork.LocalAddresses()
+            .Select(address => new Ipv4Subnet(address, ClassCMask))
             .Concat(gateways.Select(gateway => new Ipv4Subnet(gateway, ClassCMask)));
 
         var candidates = BuildCandidateAddresses(CommonHosts, gateways.Select(gateway => gateway.ToString()), subnets);
@@ -97,7 +88,9 @@ public sealed class RouterDiscoveryService
         await Task.WhenAll(probes).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var routers = found.Values.OrderBy(router => router.Address, StringComparer.OrdinalIgnoreCase).ToList();
+        var routers = found.Values
+            .OrderBy(router => router.Address, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         if (routers.Count > 0)
         {
@@ -114,8 +107,14 @@ public sealed class RouterDiscoveryService
 
         for (var i = 0; i < routers.Count; i++)
         {
-            if (names.TryGetValue(routers[i].Address, out var name) && name.Length > 0)
+            // The name from the device itself wins: the UPnP lookup is only a fallback, and on a network where
+            // a provider's ONT is the gateway it is the ONT that answers, not the router this app manages.
+            if (routers[i].Name.Length == 0 &&
+                names.TryGetValue(routers[i].Address, out var name) &&
+                name.Length > 0)
+            {
                 routers[i] = routers[i] with { Name = name };
+            }
         }
     }
 
@@ -131,7 +130,7 @@ public sealed class RouterDiscoveryService
                 hostAnswered = true;
 
                 if (IsKeeneticResponse(response))
-                    return new DiscoveredRouter(host, string.Empty);
+                    return new DiscoveredRouter(host, ReadDeviceName(response));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -152,6 +151,21 @@ public sealed class RouterDiscoveryService
     internal static bool IsKeeneticResponse(HttpResponseMessage response) =>
         response.StatusCode == HttpStatusCode.Unauthorized &&
         (response.Headers.Contains("X-NDM-Challenge") || response.Headers.Contains("X-NDM-Realm"));
+
+    /// <summary>
+    /// The name the router gives away before anyone signs in: the realm of the authentication challenge is the
+    /// name of the device («Keenetic Giga SE»), and the product header carries at least its model. This is the
+    /// only name a scan can have, because many routers do not answer the UPnP lookup at all.
+    /// </summary>
+    internal static string ReadDeviceName(HttpResponseMessage response) =>
+        ReadHeader(response, "X-NDM-Realm") is { Length: > 0 } realm
+            ? realm
+            : ReadHeader(response, "X-Ndm-Product");
+
+    private static string ReadHeader(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values)
+            ? values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty
+            : string.Empty;
 
     internal static IReadOnlyList<string> BuildCandidateAddresses(
         IEnumerable<string> commonHosts,
@@ -198,53 +212,6 @@ public sealed class RouterDiscoveryService
             yield return FromUInt32(network + offset).ToString();
     }
 
-    private static List<IPAddress> GetDefaultGateways()
-    {
-        var gateways = new List<IPAddress>();
-
-        foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (!IsUp(networkInterface))
-                continue;
-
-            foreach (var gateway in networkInterface.GetIPProperties().GatewayAddresses)
-            {
-                if (gateway.Address is { AddressFamily: AddressFamily.InterNetwork } address && !address.Equals(IPAddress.Any))
-                    gateways.Add(address);
-            }
-        }
-
-        return gateways;
-    }
-
-    private static IEnumerable<Ipv4Subnet> GetLocalSubnets()
-    {
-        var subnets = new List<Ipv4Subnet>();
-
-        foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (!IsUp(networkInterface) || IsVirtual(networkInterface))
-                continue;
-
-            foreach (var unicast in networkInterface.GetIPProperties().UnicastAddresses)
-            {
-                if (unicast.Address.AddressFamily == AddressFamily.InterNetwork)
-                    subnets.Add(new Ipv4Subnet(unicast.Address, ClassCMask));
-            }
-        }
-
-        return subnets;
-    }
-
-    private static bool IsUp(NetworkInterface networkInterface) =>
-        networkInterface.OperationalStatus == OperationalStatus.Up &&
-        networkInterface.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
-        networkInterface.NetworkInterfaceType != NetworkInterfaceType.Tunnel;
-
-    private static bool IsVirtual(NetworkInterface networkInterface) =>
-        VirtualAdapterMarkers.Any(marker =>
-            networkInterface.Description.Contains(marker, StringComparison.OrdinalIgnoreCase));
-
     private static uint ToUInt32(IPAddress address)
     {
         var bytes = address.GetAddressBytes();
@@ -252,5 +219,5 @@ public sealed class RouterDiscoveryService
     }
 
     private static IPAddress FromUInt32(uint value) =>
-        new(new[] { (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value });
+        new([(byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value]);
 }

@@ -1,31 +1,7 @@
 namespace DyndDns.TrayApp.Models;
 
-public class RouterConfig
+internal sealed class MonitorConfig
 {
-    public string Address { get; set; } = "192.168.1.1";
-    public string Username { get; set; } = "admin";
-    public string Password { get; set; } = string.Empty;
-}
-
-public class SyncConfig
-{
-    public bool AutoSync { get; set; } = true;
-}
-
-public class HotkeyConfig
-{
-    public bool Enabled { get; set; } = true;
-    public string Key { get; set; } = "V";
-    public string Modifiers { get; set; } = "Control+Shift";
-}
-
-public class SqliteConfig
-{
-    /// <summary>
-    /// SQLite database file. A relative path is resolved against the executable's config folder.
-    /// </summary>
-    public string DatabaseFile { get; set; } = "dns.db";
-
     /// <summary>Whether DNS queries are recorded while the app runs.</summary>
     public bool MonitorEnabled { get; set; } = true;
 
@@ -34,19 +10,28 @@ public class SqliteConfig
     /// with their own resolver, so their lookups are not visible to the ETW monitor.
     /// </summary>
     public bool BrowserHistoryEnabled { get; set; } = true;
-}
-
-public class AppConfig
-{
-    public RouterConfig Router { get; set; } = new();
-    public string VpnInterface { get; set; } = string.Empty;
-    public SyncConfig Sync { get; set; } = new();
-    public HotkeyConfig Hotkey { get; set; } = new();
-    public SqliteConfig Sqlite { get; set; } = new();
 
     /// <summary>
-    /// Set when the user declines the first-run setup wizard, so it is not shown again
-    /// on every launch. Cleared once valid router credentials are saved.
+    /// Whether the journal is kept to <see cref="JournalMaxRows"/> entries: once more domains that no binding
+    /// mentions have been recorded, the oldest of them are dropped. Bound domains are never removed.
+    /// </summary>
+    public bool JournalAutoCleanup { get; set; } = true;
+
+    /// <summary>How many entries of the journal the cleanup keeps.</summary>
+    public int JournalMaxRows { get; set; } = 10000;
+}
+
+/// <summary>
+/// Global settings. Everything router specific (address, credentials, VPN interface, managed domains)
+/// belongs to a <see cref="RouterProfile"/>.
+/// </summary>
+internal sealed class AppConfig
+{
+    public MonitorConfig Monitor { get; set; } = new();
+
+    /// <summary>
+    /// Set when the user declines the first-run setup, so it is not shown again on every launch.
+    /// Cleared once a router profile is saved.
     /// </summary>
     public bool SetupDismissed { get; set; }
 }

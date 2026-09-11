@@ -1,6 +1,3 @@
-using System.Drawing;
-using System.Windows.Forms;
-
 namespace DyndDns.TrayApp.Views;
 
 /// <summary>
@@ -14,60 +11,44 @@ internal sealed class CredentialsDialog : SetupDialogBase
     private readonly TextBox _password;
     private readonly CheckBox _showPassword;
 
-    public CredentialsDialog(string address, string username, string password)
-        : base("DyndDns — Вход в роутер", new Size(375, 270))
+    /// <param name="routerLabel">How the router is written in the lists: «имя (адрес)» or the address alone.</param>
+    public CredentialsDialog(string routerLabel, string address, string username, string password)
+        : base("Вход в роутер", new Size(430, 280))
     {
-        Controls.Add(CreateLabel("Адрес роутера:", new Point(15, 18)));
+        AddContent(CreateLabel($"Роутер: {routerLabel}"));
 
-        _address = new TextBox
-        {
-            Location = new Point(15, 40),
-            Width = 345,
-            Text = address
-        };
-        Controls.Add(_address);
+        _address = new TextBox { Text = address };
+        _username = new TextBox { Text = username };
+        _password = new TextBox { Text = password, UseSystemPasswordChar = true };
 
-        Controls.Add(CreateLabel("Логин:", new Point(15, 74)));
-
-        _username = new TextBox
-        {
-            Location = new Point(15, 96),
-            Width = 345,
-            Text = username
-        };
-        Controls.Add(_username);
-
-        Controls.Add(CreateLabel("Пароль:", new Point(15, 130)));
-
-        _password = new TextBox
-        {
-            Location = new Point(15, 152),
-            Width = 345,
-            UseSystemPasswordChar = true,
-            Text = password
-        };
-        Controls.Add(_password);
+        var fields = CreateFieldGrid();
+        AddField(fields, "Адрес роутера:", _address);
+        AddField(fields, "Логин:", _username);
+        AddField(fields, "Пароль:", _password);
 
         _showPassword = new CheckBox
         {
             Text = "Показать пароль",
-            Location = new Point(15, 182),
             AutoSize = true
         };
         _showPassword.CheckedChanged += (_, _) => _password.UseSystemPasswordChar = !_showPassword.Checked;
-        Controls.Add(_showPassword);
 
-        var okButton = CreateButton("Войти", new Point(175, 220), 90);
+        AddContent(fields);
+        AddContent(_showPassword);
+
+        var okButton = CreateButton("Войти (Enter)", 130);
         okButton.DialogResult = DialogResult.OK;
 
-        var cancelButton = CreateButton("Отмена", new Point(270, 220), 90);
+        var cancelButton = CreateButton("Отмена (Esc)", 115);
         cancelButton.DialogResult = DialogResult.Cancel;
 
-        Controls.AddRange(new Control[] { okButton, cancelButton });
+        ButtonBar.Controls.AddRange([okButton, cancelButton]);
         AcceptButton = okButton;
         CancelButton = cancelButton;
 
         FormClosing += OnFormClosing;
+
+        ApplyContentMinimumSize();
     }
 
     public string Address => _address.Text.Trim();

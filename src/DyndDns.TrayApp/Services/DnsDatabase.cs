@@ -1,42 +1,20 @@
 using System.Globalization;
 using DyndDns.TrayApp.Models;
-using Microsoft.Data.Sqlite;
 
 namespace DyndDns.TrayApp.Services;
 
 /// <summary>
-/// Stores aggregated DNS hits in a local SQLite file. Only the domain and its counters are kept:
-/// per the requirements the process and the exact time of each lookup are not interesting.
-/// Domains imported from a browser history share the same table.
+/// The DNS journal: which domains were looked up on this machine, how often and when. The table lives in
+/// the shared <see cref="AppDatabase"/>, next to the settings and the router profiles.
 /// </summary>
 internal sealed class DnsDatabase
 {
-    private readonly string _connectionString;
+    /// <summary>Matches the journal rows that no binding mentions; shared by the cleanup queries.</summary>
+    private const string UnboundFilter = "domain NOT IN (SELECT domain COLLATE NOCASE FROM routes)";
 
-    public DnsDatabase(string databasePath)
-    {
-        _connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWriteCreate
-        }.ToString();
-    }
+    private readonly AppDatabase _database;
 
-    public void Initialize()
-    {
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            CREATE TABLE IF NOT EXISTS dns_queries (
-                domain     TEXT    NOT NULL PRIMARY KEY,
-                hits       INTEGER NOT NULL DEFAULT 0,
-                first_seen TEXT    NOT NULL,
-                last_seen  TEXT    NOT NULL
-            );
-            """;
-        command.ExecuteNonQuery();
-    }
+    public DnsDatabase(AppDatabase database) => _database = database;
 
     /// <summary>Adds counters to existing rows, creating the missing ones.</summary>
     public void AddHits(IReadOnlyDictionary<string, int> hits)
@@ -46,15 +24,15 @@ internal sealed class DnsDatabase
 
         var now = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
 
-        using var connection = Open();
+        using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
 
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             """
-            INSERT INTO dns_queries (domain, hits, first_seen, last_seen)
-            VALUES ($domain, $hits, $now, $now)
+            INSERT INTO dns_queries (domain, hits, last_seen)
+            VALUES ($domain, $hits, $now)
             ON CONFLICT(domain) DO UPDATE SET
                 hits = hits + excluded.hits,
                 last_seen = excluded.last_seen;
@@ -68,10 +46,7 @@ internal sealed class DnsDatabase
         hitsParameter.ParameterName = "$hits";
         command.Parameters.Add(hitsParameter);
 
-        var nowParameter = command.CreateParameter();
-        nowParameter.ParameterName = "$now";
-        nowParameter.Value = now;
-        command.Parameters.Add(nowParameter);
+        command.Parameters.AddWithValue("$now", now);
 
         foreach (var entry in hits)
         {
@@ -92,15 +67,15 @@ internal sealed class DnsDatabase
         if (visits.Count == 0)
             return;
 
-        using var connection = Open();
+        using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
 
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             """
-            INSERT INTO dns_queries (domain, hits, first_seen, last_seen)
-            VALUES ($domain, $hits, $lastSeen, $lastSeen)
+            INSERT INTO dns_queries (domain, hits, last_seen)
+            VALUES ($domain, $hits, $lastSeen)
             ON CONFLICT(domain) DO UPDATE SET
                 hits = MAX(hits, excluded.hits),
                 last_seen = MAX(last_seen, excluded.last_seen);
@@ -130,6 +105,47 @@ internal sealed class DnsDatabase
     }
 
     /// <summary>
+    /// Drops the journal rows no binding mentions, i.e. the domains that are not routed anywhere; bound ones
+    /// stay. The comparison ignores case, and the bindings live in the same database file.
+    /// </summary>
+    public int DeleteUnbound()
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"DELETE FROM dns_queries WHERE {UnboundFilter};";
+
+        return command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Keeps the part of the journal that no binding mentions down to the <paramref name="keep"/> newest
+    /// entries and returns how many rows were dropped, so a long running monitor does not grow the database
+    /// without a limit. Bound domains are never removed, however old their last lookup is.
+    /// </summary>
+    public int TrimUnbound(int keep)
+    {
+        if (keep <= 0)
+            return 0;
+
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            $"""
+            DELETE FROM dns_queries
+             WHERE domain IN (
+                 SELECT domain
+                   FROM dns_queries
+                  WHERE {UnboundFilter}
+                  ORDER BY last_seen DESC, hits DESC, domain
+                  LIMIT -1 OFFSET $keep);
+            """;
+
+        command.Parameters.AddWithValue("$keep", keep);
+
+        return command.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Newest lookups first, so a domain typed in the browser is visible immediately; equal
     /// timestamps fall back to the hit count and the name. An empty term returns everything.
     /// </summary>
@@ -138,11 +154,11 @@ internal sealed class DnsDatabase
         var results = new List<DomainStat>();
         var hasTerm = !string.IsNullOrWhiteSpace(term);
 
-        using var connection = Open();
+        using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText = hasTerm
-            ? "SELECT domain, hits, first_seen, last_seen FROM dns_queries WHERE domain LIKE $term ORDER BY last_seen DESC, hits DESC, domain LIMIT $limit;"
-            : "SELECT domain, hits, first_seen, last_seen FROM dns_queries ORDER BY last_seen DESC, hits DESC, domain LIMIT $limit;";
+            ? "SELECT domain, hits, last_seen FROM dns_queries WHERE domain LIKE $term ORDER BY last_seen DESC, hits DESC, domain LIMIT $limit;"
+            : "SELECT domain, hits, last_seen FROM dns_queries ORDER BY last_seen DESC, hits DESC, domain LIMIT $limit;";
 
         if (hasTerm)
             command.Parameters.AddWithValue("$term", $"%{term!.Trim()}%");
@@ -156,8 +172,7 @@ internal sealed class DnsDatabase
             results.Add(new DomainStat(
                 reader.GetString(0),
                 reader.GetInt64(1),
-                ParseTimestamp(reader.GetString(2)),
-                ParseTimestamp(reader.GetString(3))));
+                ParseTimestamp(reader.GetString(2))));
         }
 
         return results;
@@ -167,11 +182,4 @@ internal sealed class DnsDatabase
         DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
             ? parsed
             : DateTime.MinValue;
-
-    private SqliteConnection Open()
-    {
-        var connection = new SqliteConnection(_connectionString);
-        connection.Open();
-        return connection;
-    }
 }

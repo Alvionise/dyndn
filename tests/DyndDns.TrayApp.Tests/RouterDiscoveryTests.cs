@@ -8,6 +8,25 @@ namespace DyndDns.TrayApp.Tests;
 public class RouterDiscoveryTests
 {
     [Fact]
+    public void ReadDeviceName_TakesTheNameOutOfTheAuthenticationChallenge()
+    {
+        using var full = new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        full.Headers.Add("X-NDM-Realm", "Keenetic Giga SE");
+        full.Headers.Add("X-Ndm-Product", "Giga SE");
+
+        Assert.Equal("Keenetic Giga SE", RouterDiscoveryService.ReadDeviceName(full));
+
+        // Firmware that sends only the product header still gives the model away.
+        using var productOnly = new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        productOnly.Headers.Add("X-Ndm-Product", " Giga SE ");
+
+        Assert.Equal("Giga SE", RouterDiscoveryService.ReadDeviceName(productOnly));
+
+        using var anonymous = new HttpResponseMessage(HttpStatusCode.Unauthorized);
+
+        Assert.Equal(string.Empty, RouterDiscoveryService.ReadDeviceName(anonymous));
+    }
+    [Fact]
     public void EnumerateHosts_ReturnsUsableHostsFor24Subnet()
     {
         var subnet = new Ipv4Subnet(IPAddress.Parse("192.168.1.10"), IPAddress.Parse("255.255.255.0"));
@@ -40,11 +59,11 @@ public class RouterDiscoveryTests
     [Fact]
     public void BuildCandidateAddresses_PutsCommonHostsFirstAndDeduplicates()
     {
-        var subnets = new[] { new Ipv4Subnet(IPAddress.Parse("192.168.1.10"), IPAddress.Parse("255.255.255.0")) };
+        Ipv4Subnet[] subnets = [new Ipv4Subnet(IPAddress.Parse("192.168.1.10"), IPAddress.Parse("255.255.255.0"))];
 
         var candidates = RouterDiscoveryService.BuildCandidateAddresses(
-            new[] { "192.168.1.1", "my.keenetic.net" },
-            new[] { "192.168.1.1" },
+            ["192.168.1.1", "my.keenetic.net"],
+            ["192.168.1.1"],
             subnets);
 
         Assert.Equal("192.168.1.1", candidates[0]);

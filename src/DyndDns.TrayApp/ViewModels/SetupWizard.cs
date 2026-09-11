@@ -1,6 +1,3 @@
-using System.Diagnostics;
-using System.IO;
-using System.Windows.Forms;
 using DyndDns.TrayApp.Models;
 using DyndDns.TrayApp.Services;
 using DyndDns.TrayApp.Views;
@@ -8,134 +5,169 @@ using DyndDns.TrayApp.Views;
 namespace DyndDns.TrayApp.ViewModels;
 
 /// <summary>
-/// Drives the first-run (and manually re-runnable) router setup: scan the network, let the user
-/// pick a device when several are found, then verify and persist the credentials.
+/// Drives the router setup. Adding a router scans the network, lets the user pick a device from the list
+/// (or type an address), then verifies the credentials and stores them as a profile. Editing an existing
+/// profile asks for the credentials straight away — the router is already known, so there is nothing to
+/// search for.
 /// </summary>
 internal sealed class SetupWizard
 {
     private const string DefaultUsername = "admin";
 
-    private readonly ConfigService _configService;
+    private readonly SettingsStore _store;
 
-    public SetupWizard(ConfigService configService) => _configService = configService;
+    public SetupWizard(SettingsStore store) => _store = store;
 
     /// <summary>
-    /// Runs the wizard. Returns <c>true</c> when valid credentials were saved to the configuration.
+    /// Runs the wizard and returns the stored profile, or <c>null</c> when it was cancelled. Without
+    /// <paramref name="profileToUpdate"/> a new router is searched for; with it the credentials of that
+    /// profile are edited, and no scan is performed because the router is already known.
     /// </summary>
-    public bool Run(AppConfig config)
-    {
-        using var scan = new ScanProgressDialog(new RouterDiscoveryService());
-        scan.ShowDialog();
+    public RouterProfile? Run(RouterProfile? profileToUpdate) =>
+        profileToUpdate is null ? AddRouter() : EditCredentials(profileToUpdate);
 
-        if (scan.Canceled)
+    /// <summary>Scans the network, lets the user pick a device and stores the credentials as a new profile.</summary>
+    private RouterProfile? AddRouter()
+    {
+        List<DiscoveredRouter> routers;
+        bool canceled;
+
+        using (var scan = new ScanProgressDialog(new RouterDiscoveryService()))
         {
-            Dismiss(config);
-            return false;
+            scan.ShowDialog();
+            routers = scan.Results;
+            canceled = scan.Canceled;
         }
 
-        if (!TryPickAddress(config, scan.Results, out var address))
-            return false;
+        if (canceled)
+        {
+            Dismiss();
+            return null;
+        }
 
-        return PromptForCredentials(config, address);
+        // The list is shown again when the picked address turns out to be configured already, so the user can
+        // choose another router right away instead of typing through the credentials first.
+        while (true)
+        {
+            using var selection = new RouterSelectionDialog(routers);
+
+            if (selection.ShowDialog() != DialogResult.OK)
+            {
+                Dismiss();
+                return null;
+            }
+
+            var address = RouterAddress.Normalize(selection.Address);
+
+            if (WarnIfAddressIsTaken(address, editing: null))
+                continue;
+
+            var name = selection.SelectedRouter is { Name.Length: > 0 } discovered ? discovered.Name : address;
+
+            return PromptForCredentials(name, address, profile: null);
+        }
     }
 
-    private bool TryPickAddress(AppConfig config, IReadOnlyList<DiscoveredRouter> routers, out string address)
+    /// <summary>Updates the profile the user opened; a changed address does not create a second one.</summary>
+    private RouterProfile? EditCredentials(RouterProfile profile) =>
+        PromptForCredentials(profile.Name, profile.Address, profile);
+
+    /// <param name="profile">
+    /// The profile to update, or <c>null</c> to store a new one.
+    /// </param>
+    private RouterProfile? PromptForCredentials(string name, string address, RouterProfile? profile)
     {
-        address = string.Empty;
-
-        if (routers.Count == 0)
-        {
-            var openConfig = MessageBox.Show(
-                "Роутер Keenetic не найден.\n\nОткрыть dyndns.json для ручной настройки?",
-                "DyndDns",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Information);
-
-            if (openConfig == DialogResult.Yes)
-                OpenConfigFile();
-
-            Dismiss(config);
-            return false;
-        }
-
-        if (routers.Count == 1)
-        {
-            address = routers[0].Address;
-            return true;
-        }
-
-        using var selection = new RouterSelectionDialog(routers);
-
-        if (selection.ShowDialog() != DialogResult.OK)
-        {
-            Dismiss(config);
-            return false;
-        }
-
-        address = selection.Address;
-        return true;
-    }
-
-    private bool PromptForCredentials(AppConfig config, string address)
-    {
-        var username = string.IsNullOrWhiteSpace(config.Router.Username) ? DefaultUsername : config.Router.Username;
-        var password = config.Router.Password;
+        var username = profile is { Username.Length: > 0 } ? profile.Username : DefaultUsername;
+        var password = profile?.Password ?? string.Empty;
 
         while (true)
         {
-            using var dialog = new CredentialsDialog(address, username, password);
+            using var dialog = new CredentialsDialog(RouterLabel.Format(name, address), address, username, password);
 
             if (dialog.ShowDialog() != DialogResult.OK)
             {
-                Dismiss(config);
-                return false;
+                Dismiss();
+                return null;
             }
 
-            address = dialog.Address;
+            address = RouterAddress.Normalize(dialog.Address);
             username = dialog.Username;
             password = dialog.Password;
 
-            // Runs on the thread pool so a slow or unreachable router never blocks the UI thread
-            // and the continuation never needs a UI synchronization context.
-            var valid = Task.Run(() => KeeneticApiService.ValidateCredentialsAsync(address, username, password))
-                .GetAwaiter().GetResult();
+            // The address may also have been corrected in this dialog, so it is checked again here.
+            if (WarnIfAddressIsTaken(address, profile))
+                continue;
 
-            if (valid)
+            var valid = RunOnPool(() => KeeneticApiService.ValidateCredentialsAsync(address, username, password));
+
+            if (!valid)
             {
-                config.Router.Address = RouterAddress.Normalize(address);
-                config.Router.Username = username;
-                config.Router.Password = password;
-                config.SetupDismissed = false;
-                _configService.SaveConfig(config);
-                return true;
+                Dialogs.Warn(null, "Не удалось войти с указанными логином и паролем. Проверьте данные и попробуйте снова.");
+                continue;
             }
 
-            MessageBox.Show(
-                "Не удалось войти с указанными логином и паролем. Проверьте данные и попробуйте снова.",
-                "DyndDns",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            // The name of the device is taken from the router itself: a router that does not answer the UPnP
+            // scan carries no name, and a profile stored under its address would be listed as a bare IP.
+            var deviceName = RunOnPool(() => KeeneticApiService.ReadDeviceNameAsync(address, username, password));
+
+            var target = profile ?? new RouterProfile { Name = name };
+
+            if (deviceName.Length > 0)
+                target.Name = deviceName;
+
+            target.Address = address;
+            target.Username = username;
+            target.Password = password;
+
+            var saved = _store.SaveRouter(target);
+
+            var config = _store.LoadConfig();
+            config.SetupDismissed = false;
+            _store.SaveConfig(config);
+
+            return saved;
         }
     }
 
-    private void Dismiss(AppConfig config)
+    /// <summary>
+    /// Runs a router call on the thread pool and waits for its answer. The wizard is modal and its steps are a
+    /// plain loop, so the call itself is moved off the UI thread — a slow or unreachable router would freeze the
+    /// dialog for as long as its request timeout lasts — while the answer is still awaited here.
+    /// </summary>
+    private static T RunOnPool<T>(Func<Task<T>> work) => Task.Run(work).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Warns that the address already belongs to a profile and returns <c>true</c>, so the caller asks for
+    /// another one. One device is one profile: a second profile for the same router would write the same
+    /// groups on it and remove the domains of the first. A profile editing itself is not a conflict.
+    /// </summary>
+    private bool WarnIfAddressIsTaken(string address, RouterProfile? editing)
     {
-        // Only an unconfigured router needs the cancellation remembered; once credentials exist,
-        // a cancelled re-run must not leave a stale flag that would suppress a future wizard.
-        if (config.SetupDismissed || ConfigService.IsRouterConfigured(config))
+        var taken = _store.FindByHost(address, editing?.Id ?? 0);
+
+        if (taken is null)
+            return false;
+
+        Dialogs.Warn(null, $"По адресу {address} уже добавлен роутер «{taken.DisplayName}». Настройте его в меню «Роутеры».");
+
+        return true;
+    }
+
+    /// <summary>
+    /// Remembers a cancelled setup, so the wizard is not offered on every launch. Only relevant while
+    /// no profile exists yet: cancelling a later run must not change anything.
+    /// </summary>
+    private void Dismiss()
+    {
+        if (_store.GetRouters().Count > 0)
+            return;
+
+        var config = _store.LoadConfig();
+
+        if (config.SetupDismissed)
             return;
 
         config.SetupDismissed = true;
-        _configService.SaveConfig(config);
-    }
-
-    private void OpenConfigFile()
-    {
-        var path = _configService.ConfigPath;
-
-        if (!File.Exists(path))
-            return;
-
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        _store.SaveConfig(config);
     }
 }

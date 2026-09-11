@@ -18,6 +18,14 @@ public class DomainNormalizerTests
     [InlineData("example.com/path?query=1", "example.com")]
     [InlineData("https://sub.example.org/a/b?c=d", "sub.example.org")]
     [InlineData("HTTP://WWW.EXAMPLE.COM/X", "EXAMPLE.COM")]
+    [InlineData("example.com:8443", "example.com")]
+    [InlineData("https://www.example.com:8443/path?q=1", "example.com")]
+    [InlineData("example.com#anchor", "example.com")]
+
+    // A name that starts with "www." and keeps a single label after it is a domain of its own: dropping the
+    // prefix would leave the bare top-level domain.
+    [InlineData("www.com", "www.com")]
+    [InlineData("WWW.RU", "WWW.RU")]
     [InlineData("", "")]
     public void Normalize_ReducesInputToBareDomain(string input, string expected) =>
         Assert.Equal(expected, DomainNormalizer.Normalize(input));

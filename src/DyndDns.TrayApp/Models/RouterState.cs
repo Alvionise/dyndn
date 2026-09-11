@@ -1,25 +1,24 @@
 namespace DyndDns.TrayApp.Models;
 
-public class FqdnGroupEntry
+internal sealed class FqdnGroupEntry
 {
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
-    public List<string> Domains { get; set; } = new();
+    public List<string> Domains { get; set; } = [];
 }
 
-public class DnsRouteEntry
+internal sealed class DnsRouteEntry
 {
     public string Index { get; set; } = string.Empty;
     public string Group { get; set; } = string.Empty;
     public string Interface { get; set; } = string.Empty;
-    public string Comment { get; set; } = string.Empty;
 }
 
-public class RouterState
+internal sealed class RouterState
 {
-    public List<FqdnGroupEntry> FqdnGroups { get; set; } = new();
-    public List<DnsRouteEntry> DnsRoutes { get; set; } = new();
+    public List<FqdnGroupEntry> FqdnGroups { get; set; } = [];
+    public List<DnsRouteEntry> DnsRoutes { get; set; } = [];
 }
 
 /// <summary>A dns-proxy route as configured on the router with the domains of the group it points at.</summary>
-public sealed record RouterRouteGroup(string GroupName, string Interface, IReadOnlyList<string> Domains);
+internal sealed record RouterRouteGroup(string GroupName, string Interface, IReadOnlyList<string> Domains);

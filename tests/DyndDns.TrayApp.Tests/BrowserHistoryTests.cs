@@ -10,7 +10,7 @@ public class BrowserHistoryTests : IDisposable
 {
     private static readonly DateTime ChromiumEpoch = new(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
-    private readonly List<string> _databases = new();
+    private readonly List<string> _databases = [];
 
     [Fact]
     public void Read_AggregatesVisitsPerDomain()
@@ -24,7 +24,7 @@ public class BrowserHistoryTests : IDisposable
             ("chrome://settings", 5, micros),
             ("https://other.net/", 1, micros));
 
-        var visits = new BrowserHistoryReader().Read(new[] { new BrowserHistoryDatabase(path, BrowserHistoryFormat.Chromium) });
+        var visits = new BrowserHistoryReader().Read([new BrowserHistoryDatabase(path, BrowserHistoryFormat.Chromium)]);
 
         Assert.Equal(2, visits.Count);
         Assert.Equal(5L, visits["example.com"].Hits);
@@ -40,11 +40,11 @@ public class BrowserHistoryTests : IDisposable
         var chromium = CreateChromiumHistory(("https://example.com/", 4, ToChromiumMicros(moment)));
         var firefox = CreateFirefoxHistory(("https://example.com/", 6, ToFirefoxMicros(moment.AddHours(1))));
 
-        var visits = new BrowserHistoryReader().Read(new[]
-        {
+        var visits = new BrowserHistoryReader().Read(
+        [
             new BrowserHistoryDatabase(chromium, BrowserHistoryFormat.Chromium),
             new BrowserHistoryDatabase(firefox, BrowserHistoryFormat.Firefox)
-        });
+        ]);
 
         var visit = Assert.Single(visits);
         Assert.Equal(10L, visit.Value.Hits);
@@ -57,10 +57,23 @@ public class BrowserHistoryTests : IDisposable
         var moment = new DateTime(2026, 9, 1, 8, 15, 0, DateTimeKind.Utc);
         var path = CreateFirefoxHistory(("https://firefox.example.org/", 7, ToFirefoxMicros(moment)));
 
-        var visits = new BrowserHistoryReader().Read(new[] { new BrowserHistoryDatabase(path, BrowserHistoryFormat.Firefox) });
+        var visits = new BrowserHistoryReader().Read([new BrowserHistoryDatabase(path, BrowserHistoryFormat.Firefox)]);
 
         Assert.Equal(7L, visits["firefox.example.org"].Hits);
         Assert.Equal(moment, visits["firefox.example.org"].LastSeen);
+    }
+
+    [Fact]
+    public void Read_SurvivesAnAbsurdTimestamp()
+    {
+        // A corrupt value must neither throw nor wrap around: the conversion clamps it, so the visits of that
+        // browser are still read instead of the whole database being skipped.
+        var path = CreateChromiumHistory(("https://clamped.example.org/", 3, long.MaxValue));
+
+        var visits = new BrowserHistoryReader().Read([new BrowserHistoryDatabase(path, BrowserHistoryFormat.Chromium)]);
+
+        Assert.Equal(3L, visits["clamped.example.org"].Hits);
+        Assert.Equal(DateTime.MaxValue.Ticks, visits["clamped.example.org"].LastSeen.Ticks);
     }
 
     [Fact]
@@ -68,7 +81,7 @@ public class BrowserHistoryTests : IDisposable
     {
         var missing = Path.Combine(Path.GetTempPath(), "dyndns-missing-" + Guid.NewGuid().ToString("N") + ".db");
 
-        var visits = new BrowserHistoryReader().Read(new[] { new BrowserHistoryDatabase(missing, BrowserHistoryFormat.Chromium) });
+        var visits = new BrowserHistoryReader().Read([new BrowserHistoryDatabase(missing, BrowserHistoryFormat.Chromium)]);
 
         Assert.Empty(visits);
     }

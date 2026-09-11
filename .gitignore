@@ -51,14 +51,15 @@ Desktop.ini
 $RECYCLE.BIN/
 *.stackdump
 
-# Local runtime configuration (may contain router credentials).
-# Use the tracked *.example.json templates instead.
-src/DyndDns.TrayApp/config/dyndns.json
-src/DyndDns.TrayApp/config/dns-list.json
-**/config/dyndns.json
-**/config/dns-list.json
-**/config/dns-routes.json
-**/config/dns.db
+# Local runtime data: the SQLite database holds the router credentials, so it is never committed.
+**/config/dyndns.db
+**/config/dyndns.db-journal
+**/config/dyndns.db-shm
+**/config/dyndns.db-wal
 
 # Logs
 *.log
+
+# Local design notes: the plans are scratched out while a change is being built. They are kept on disk
+# for reference but are not part of the product or of the repository.
+plans/
