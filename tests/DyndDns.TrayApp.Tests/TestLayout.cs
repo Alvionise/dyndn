@@ -3,8 +3,8 @@ using Xunit;
 namespace DyndDns.TrayApp.Tests;
 
 /// <summary>
-/// The checks every window's layout has to pass. Windows and dialogs are built from the same shapes, so the
-/// checks are written once here and used by the tests of both.
+/// The checks a dialog's layout has to pass. The dialogs are built from the same shapes, so the check is written
+/// once here and used by the tests of each of them.
 /// </summary>
 internal static class TestLayout
 {

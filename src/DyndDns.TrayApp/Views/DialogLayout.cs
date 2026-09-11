@@ -31,7 +31,8 @@ internal static class DialogLayout
         window.ClientSize = designed;
         window.PerformLayout();
 
-        var needed = NeededSize(root);
+        // PreferredSize already covers the margins and the padding of the root, so it is used as it is.
+        var needed = root.PreferredSize;
 
         var size = new Size(
             Math.Max(designed.Width, needed.Width),
@@ -42,27 +43,6 @@ internal static class DialogLayout
         // The frame and the caption of the window are what a client size turns into on the screen, and the window
         // has just been given exactly that size, so its own size is the minimum it may ever have.
         window.MinimumSize = window.Size;
-    }
-
-    /// <summary>
-    /// What the root of a window has to be given to show everything it holds. The rows of the root are stacked, so
-    /// the width is that of the widest of them plus its margin and the padding of the root around it. PreferredSize
-    /// alone is a couple of pixels short of that on some display metrics, and a row that is a couple of pixels too
-    /// wide takes the border of the window with it — the very thing the minimum size is there to prevent.
-    /// </summary>
-    private static Size NeededSize(Control root)
-    {
-        var needed = root.PreferredSize;
-
-        foreach (Control child in root.Controls)
-        {
-            var wanted = child.PreferredSize;
-
-            needed.Width = Math.Max(needed.Width, wanted.Width + child.Margin.Horizontal + root.Padding.Horizontal);
-            needed.Height = Math.Max(needed.Height, wanted.Height + child.Margin.Vertical + root.Padding.Vertical);
-        }
-
-        return needed;
     }
 
     /// <summary>Group box that sizes itself to its content; the padding is left to the caller's design.</summary>

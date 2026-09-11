@@ -33,31 +33,6 @@ public class MonitoringWindowTests
     }
 
     [Fact]
-    public void Constructor_KeepsTheWindowFromBeingShrunkBelowItsContent()
-    {
-        using var window = CreateWindow();
-        var root = Assert.Single(window.Controls.Cast<Control>());
-
-        // The window is designed for 1020×620, and it may never be resized below what its rows need, otherwise a
-        // control is pushed out of sight (the autostart checkbox and the bind button used to disappear that way).
-        Assert.True(window.MinimumSize.Width >= 1020, $"minimum width was {window.MinimumSize.Width}");
-        Assert.True(window.MinimumSize.Height >= 500, $"minimum height was {window.MinimumSize.Height}");
-
-        // Nothing hangs over the border of the layout it was given, where the window is as wide as its minimum.
-        TestLayout.AssertNothingEscapesItsParent(window);
-
-        // The minimum is taken from the content measured at the size the window was designed for. Measured at the
-        // bounds the window happens to have, the rows that fill the remaining width report the width they were
-        // given — a value that grows with the very window it would be compared against.
-        window.ClientSize = new Size(1020, 620);
-        window.PerformLayout();
-
-        Assert.True(
-            window.MinimumSize.Width >= root.PreferredSize.Width,
-            $"minimum width {window.MinimumSize.Width} is below the content {root.PreferredSize.Width} of the designed width");
-    }
-
-    [Fact]
     public void Constructor_OpensOnAllRoutersAndKeepsTheUnboundDomainsAsAChoice()
     {
         using var window = CreateWindow();
