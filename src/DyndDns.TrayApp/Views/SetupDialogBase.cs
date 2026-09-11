@@ -80,9 +80,9 @@ internal abstract class SetupDialogBase : Form
             ? new RowStyle(SizeType.Percent, 100F)
             : new RowStyle(SizeType.AutoSize));
 
-        control.Dock = !fillHeight && control is Label or CheckBox or RadioButton
-            ? DockStyle.Top
-            : DockStyle.Fill;
+        // A row takes the width of the dialog and the height its content needs; only the control that is given the
+        // free space of the dialog fills its cell.
+        control.Dock = fillHeight ? DockStyle.Fill : DockStyle.Top;
 
         Content.Controls.Add(control, 0, row);
     }

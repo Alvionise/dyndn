@@ -25,7 +25,3 @@
 *.exe binary
 *.dll binary
 *.zip binary
-
-# Keep diffs readable for generated-looking files.
-*.min.js -diff
-*.min.css -diff

@@ -8,9 +8,6 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[*.{cs,csproj,xaml}]
-indent_size = 4
-
 # --- Стиль кода: один для всего проекта, проверяется через dotnet format ---
 # Пространства имён объявляются для файла, System.* идёт первым.
 csharp_style_namespace_declarations = file_scoped:warning
