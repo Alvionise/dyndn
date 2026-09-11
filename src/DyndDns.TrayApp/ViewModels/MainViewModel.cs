@@ -41,7 +41,8 @@ internal sealed class MainViewModel : IMonitoringWindowHost
     /// <summary>
     /// Whether the synchronization that is running was asked for by the user. An explicit request is reported
     /// when it finishes; the runs the app starts on its own (at launch, after an edit) stay silent unless they
-    /// fail. Every request rewrites it, so it always describes the last one.
+    /// fail. It stays on until a run finishes, so a request the app makes while the asked-for one is on its way
+    /// does not silence its outcome.
     /// </summary>
     private bool _reportSyncOutcome;
 
@@ -305,8 +306,10 @@ internal sealed class MainViewModel : IMonitoringWindowHost
     private void RequestSync(int? routerId = null, bool reportOutcome = false)
     {
         // Only an explicit request turns the report on, and it stays on until a run finishes: a request the app
-        // makes on its own must not silence the outcome of the one the user asked for.
-        if (reportOutcome)
+        // makes on its own must not silence the outcome of the one the user asked for. A request with nothing to
+        // push reports nothing at all, so it is not remembered either — otherwise the report would wait for the
+        // next run, which the user never asked for.
+        if (reportOutcome && _settings.GetRouters().Count > 0)
             _reportSyncOutcome = true;
 
         _syncService.RequestSync(routerId);

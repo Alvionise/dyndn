@@ -58,16 +58,10 @@ internal abstract class SetupDialogBase : Form
     protected TableLayoutPanel Content { get; }
 
     /// <summary>
-    /// Locks the minimum size to what the dialog actually needs, so nothing can ever be clipped. Call it as
-    /// the last step of a dialog constructor, once all rows are added.
+    /// Sizes the dialog to what its layout needs and locks that size as its minimum, so nothing can ever be
+    /// clipped. Call it as the last step of a dialog constructor, once all rows are added.
     /// </summary>
-    protected void ApplyContentMinimumSize()
-    {
-        var size = DialogLayout.ClientSizeNeeded(_root, _designedClientSize);
-
-        MinimumSize = SizeFromClientSize(size);
-        ClientSize = size;
-    }
+    protected void ApplyContentMinimumSize() => DialogLayout.ApplyMinimumSize(this, _root, _designedClientSize);
 
     /// <summary>Button strip under the content, filled right to left.</summary>
     protected FlowLayoutPanel ButtonBar { get; }

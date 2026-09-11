@@ -5,9 +5,9 @@ using System.Text;
 namespace DyndDns.TrayApp.Services;
 
 /// <summary>
-/// Protects the router password at rest with Windows DPAPI (current-user scope) so the
-/// stored config no longer contains a recoverable secret. Values without the
-/// <see cref="ProtectedPrefix"/> marker are treated as legacy plaintext and passed through.
+/// Protects the router password at rest with Windows DPAPI (current-user scope), so the database never holds a
+/// secret anyone can read back. A value without the <see cref="ProtectedPrefix"/> marker is used as it stands:
+/// that is a password written into the database by hand, and what the app stores when DPAPI is unavailable.
 /// </summary>
 internal static class PasswordProtector
 {

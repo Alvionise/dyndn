@@ -89,21 +89,35 @@ public class DialogLayoutTests
 
     /// <summary>
     /// The rule every window applies to its own size: the layout asks for more room when its content needs it,
-    /// and the window is never allowed below the size it was designed for.
+    /// and the size the window then has is the one it may never be shrunk below.
     /// </summary>
     [Fact]
-    public void ClientSizeNeeded_FollowsTheContentAndNeverGoesBelowTheDesignedSize()
+    public void ApplyMinimumSize_GrowsTheWindowWithItsContentAndPinsIt()
     {
-        var designed = new Size(200, 150);
+        using var window = new Form();
+        using var content = DialogLayout.Stack([new Panel { Size = new Size(900, 700) }]);
+        window.Controls.Add(content);
 
-        using var small = DialogLayout.Stack([new Label { Text = "мелко" }]);
-        Assert.Equal(designed, DialogLayout.ClientSizeNeeded(small, designed));
+        DialogLayout.ApplyMinimumSize(window, content, new Size(200, 150));
 
-        using var big = DialogLayout.Stack([new Panel { Size = new Size(900, 700) }]);
-        var needed = DialogLayout.ClientSizeNeeded(big, designed);
+        Assert.True(window.ClientSize.Width >= 900, $"width was {window.ClientSize.Width}");
+        Assert.True(window.ClientSize.Height >= 700, $"height was {window.ClientSize.Height}");
+        Assert.True(window.MinimumSize.Width >= window.ClientSize.Width);
+        Assert.True(window.MinimumSize.Height >= window.ClientSize.Height);
+    }
 
-        Assert.True(needed.Width >= 900, $"width was {needed.Width}");
-        Assert.True(needed.Height >= 700, $"height was {needed.Height}");
+    [Fact]
+    public void ApplyMinimumSize_KeepsAWindowAtItsDesignedSizeWhenTheContentFits()
+    {
+        using var window = new Form();
+        using var content = DialogLayout.Stack([new Label { Text = "мелко" }]);
+        window.Controls.Add(content);
+
+        DialogLayout.ApplyMinimumSize(window, content, new Size(200, 150));
+
+        Assert.Equal(200, window.ClientSize.Width);
+        Assert.Equal(150, window.ClientSize.Height);
+        Assert.Equal(window.Size, window.MinimumSize);
     }
 
     /// <summary>

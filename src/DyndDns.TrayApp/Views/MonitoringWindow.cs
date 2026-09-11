@@ -232,14 +232,9 @@ internal sealed class MonitoringWindow : Form
     private void UpdateBindingFilters() =>
         _boundOnlyCheck.Enabled = (_routerFilter.SelectedItem as RouterChoice)?.UnboundOnly != true;
 
-    /// <summary>Keeps the content from being clipped; see <see cref="DialogLayout.ClientSizeNeeded"/>.</summary>
-    private void ApplyContentMinimumSize(Control root, Size designed)
-    {
-        var size = DialogLayout.ClientSizeNeeded(root, designed);
-
-        MinimumSize = SizeFromClientSize(size);
-        ClientSize = size;
-    }
+    /// <summary>Keeps the content from being clipped; see <see cref="DialogLayout.ApplyMinimumSize"/>.</summary>
+    private void ApplyContentMinimumSize(Control root, Size designed) =>
+        DialogLayout.ApplyMinimumSize(this, root, designed);
 
     protected override void OnShown(EventArgs e)
     {

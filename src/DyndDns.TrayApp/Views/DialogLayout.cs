@@ -18,18 +18,41 @@ internal static class DialogLayout
     };
 
     /// <summary>
-    /// The client size a window needs so its layout is never clipped: never below the size the window was
-    /// designed for, larger when a row asks for more room than that. The window turns it into its minimum size
-    /// and applies it, because a window can only measure itself.
+    /// Gives a window the size its layout needs and locks that size as its minimum, so nothing is ever clipped:
+    /// the window never shrinks below the size it was designed for and grows when a row asks for more room.
+    /// The layout is measured once more after the size was applied, because a row that fills the remaining width
+    /// — the table of the monitoring window — asks for its room only once the window is that wide, and a
+    /// measurement taken on the narrow window every form starts as would leave that control out of sight.
     /// </summary>
-    public static Size ClientSizeNeeded(Control root, Size designed)
+    public static void ApplyMinimumSize(Form window, Control root, Size designed)
     {
-        // PreferredSize already covers the margins and the padding of the root, so it is compared as it is.
-        var needed = root.PreferredSize;
+        var size = designed;
 
-        return new Size(
-            Math.Max(designed.Width, needed.Width),
-            Math.Max(designed.Height, needed.Height));
+        for (var pass = 0; pass < 3; pass++)
+        {
+            window.ClientSize = size;
+            window.PerformLayout();
+
+            // PreferredSize already covers the margins and the padding of the root, so it is used as it is.
+            var needed = root.PreferredSize;
+
+            var next = new Size(
+                Math.Max(designed.Width, needed.Width),
+                Math.Max(designed.Height, needed.Height));
+
+            // The measurement is taken at the size that was just applied, so it fits as soon as the content no
+            // longer asks for more room than the window has — which is what the loop waits for.
+            if (next.Width <= size.Width && next.Height <= size.Height)
+                break;
+
+            size = next;
+        }
+
+        window.ClientSize = size;
+
+        // The frame and the caption of the window are what a client size turns into on the screen, and the window
+        // has just been given exactly that size, so its own size is the minimum it may ever have.
+        window.MinimumSize = window.Size;
     }
 
     /// <summary>Group box that sizes itself to its content; the padding is left to the caller's design.</summary>
